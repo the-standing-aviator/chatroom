@@ -1,0 +1,12 @@
+# 编译产物
+*.exe
+bin/
+
+# SQLite 数据库文件（运行时生成，不提交）
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 系统文件
+.DS_Store
