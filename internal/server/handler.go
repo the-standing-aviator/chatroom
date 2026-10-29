@@ -22,7 +22,7 @@ func (srv *Server) handle(conn net.Conn) {
 				zap.String("stack", string(debug.Stack())),
 			)
 		}
-		_ = conn.Close()
+		// 连接由 writeLoop 在 flush 完发送队列后统一关闭（优雅关闭），这里不再直接关。
 	}()
 
 	sess := newSession(conn, srv)
