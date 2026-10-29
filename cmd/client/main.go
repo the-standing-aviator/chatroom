@@ -22,6 +22,7 @@ func init() {
 // Client 是聊天室客户端。
 type Client struct {
 	conn net.Conn
+	done chan struct{} // 主动退出信号：receive 用它区分主动退出与异常断开
 }
 
 func main() {
@@ -63,6 +64,8 @@ func (c *Client) run() {
 	}
 	fmt.Println(resp.Content)
 
+	c.done = make(chan struct{})
+
 	// 心跳保活 + 接收服务器消息
 	go c.heartbeat()
 	go c.receive()
@@ -83,6 +86,7 @@ func (c *Client) run() {
 			c.history()
 		case "0":
 			fmt.Println("已退出")
+			close(c.done) // 通知 receive 这是主动退出
 			return
 		default:
 			fmt.Println("无效选项，请输入 0-5")
@@ -118,8 +122,14 @@ func (c *Client) receive() {
 	for {
 		m, err := protocol.ReadFrame(c.conn)
 		if err != nil {
-			fmt.Printf("\n[连接已断开] %v\n", err)
-			os.Exit(0)
+			select {
+			case <-c.done:
+				// 主动退出：静默返回，不打印「连接已断开」
+				return
+			default:
+				fmt.Printf("\n[连接已断开] %v\n", err)
+				os.Exit(0)
+			}
 		}
 		c.printMessage(m)
 	}
