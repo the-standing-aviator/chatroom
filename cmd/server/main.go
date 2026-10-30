@@ -4,6 +4,9 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"go.uber.org/zap"
 
@@ -29,7 +32,22 @@ func main() {
 	defer st.Close()
 
 	srv := server.NewServer(*addr, logger, st)
+
+	// 监听退出信号，触发优雅关闭：flush 持久化队列后退出，正常关闭不丢消息。
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	done := make(chan struct{})
+	go func() {
+		sig := <-sigCh
+		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+		srv.Shutdown()
+		close(done)
+	}()
+
 	if err := srv.Start(); err != nil {
 		logger.Fatal("server failed", zap.Error(err))
 	}
+	<-done // 等 Shutdown flush 完成
+	logger.Info("shutdown complete")
 }

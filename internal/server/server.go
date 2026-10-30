@@ -2,6 +2,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"runtime/debug"
@@ -29,8 +30,12 @@ type Server struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session // 以昵称为键的在线会话表
 
-	saveCh  chan store.Message // 持久化队列：广播先入队，saveLoop 后台落盘
-	dropped atomic.Int64       // 因发送队列满被丢弃的消息计数
+	saveCh   chan store.Message // 持久化队列：广播先入队，saveLoop 后台落盘
+	saveDone chan struct{}      // saveLoop 退出信号，优雅关闭时靠它等 flush 完成
+	dropped  atomic.Int64       // 因发送队列满被丢弃的消息计数
+
+	ln       net.Listener    // 监听器，Shutdown 时 Close 以停止接收新连接
+	handleWG sync.WaitGroup  // 跟踪 handle goroutine，Shutdown 时等其退出
 }
 
 // NewServer 创建一个服务器实例。log 可为 nil（内部用 zap.NewNop 兜底）。
@@ -44,6 +49,7 @@ func NewServer(addr string, log *zap.Logger, st store.Store) *Server {
 		store:    st,
 		sessions: make(map[string]*Session),
 		saveCh:   make(chan store.Message, 1024),
+		saveDone: make(chan struct{}),
 	}
 }
 
@@ -53,6 +59,7 @@ func (srv *Server) Start() error {
 	if err != nil {
 		return err
 	}
+	srv.ln = ln
 	srv.log.Info("server started", zap.String("addr", srv.addr))
 
 	go srv.logStats()
@@ -61,16 +68,24 @@ func (srv *Server) Start() error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil // Shutdown 关闭了监听器，正常退出
+			}
 			srv.log.Error("accept error", zap.Error(err))
 			continue
 		}
-		go srv.handle(conn)
+		srv.handleWG.Add(1)
+		go func() {
+			defer srv.handleWG.Done()
+			srv.handle(conn)
+		}()
 	}
 }
 
 // saveLoop 后台持久化：从队列取消息写入存储，与广播路径解耦。
 // 队列由进程退出时关闭（见优雅关闭），这里 range 消费完即退出。
 func (srv *Server) saveLoop() {
+	defer close(srv.saveDone)
 	for m := range srv.saveCh {
 		srv.saveOne(m)
 	}
@@ -92,6 +107,13 @@ func (srv *Server) saveOne(m store.Message) {
 	}
 }
 
+// enqueue 投递一条消息到持久化队列。recover 兜底：Shutdown 关闭 saveCh 后
+// 若仍有极端竞态写入，避免 panic（与 session.send 的防御思路一致）。
+func (srv *Server) enqueue(m store.Message) {
+	defer func() { _ = recover() }()
+	srv.saveCh <- m
+}
+
 // broadcast 把一条公聊消息广播给所有在线用户，并异步持久化。
 func (srv *Server) broadcast(from, content string) {
 	ts := time.Now().Unix()
@@ -104,7 +126,7 @@ func (srv *Server) broadcast(from, content string) {
 	srv.mu.RUnlock()
 
 	// 异步持久化：只入队不落盘，广播延迟不再被磁盘 I/O 拖累。
-	srv.saveCh <- store.Message{Type: "chat", From: from, Content: content, TS: time.Unix(ts, 0)}
+	srv.enqueue(store.Message{Type: "chat", From: from, Content: content, TS: time.Unix(ts, 0)})
 }
 
 // broadcastSystem 广播一条系统提示（上下线、改名等，不持久化）。
@@ -129,7 +151,7 @@ func (srv *Server) private(from, to, content string) bool {
 	srv.mu.RUnlock()
 
 	if ok {
-		srv.saveCh <- store.Message{Type: "private", From: from, To: to, Content: content, TS: time.Unix(ts, 0)}
+		srv.enqueue(store.Message{Type: "private", From: from, To: to, Content: content, TS: time.Unix(ts, 0)})
 	}
 	return ok
 }
@@ -179,6 +201,29 @@ func (srv *Server) removeSession(s *Session) {
 		delete(srv.sessions, s.Name())
 	}
 	srv.mu.Unlock()
+}
+
+// Shutdown 优雅关闭：停止接收新连接，关闭所有会话，并 flush 持久化队列。
+// 顺序是关键——先停生产者（handle），再 close 队列，最后等消费者排空，
+// 否则 close(saveCh) 后仍有 handle 写入会 panic。
+func (srv *Server) Shutdown() {
+	_ = srv.ln.Close() // 停止 Accept，Start 返回
+
+	// 快照在线会话后逐个关闭（close 内部会再拿 srv.mu，不能持锁遍历，否则死锁）。
+	srv.mu.Lock()
+	sessions := make([]*Session, 0, len(srv.sessions))
+	for _, s := range srv.sessions {
+		sessions = append(sessions, s)
+	}
+	srv.mu.Unlock()
+
+	for _, s := range sessions {
+		s.close()
+	}
+
+	srv.handleWG.Wait() // 等所有 handle 退出，不再有 saveCh 生产者
+	close(srv.saveCh)   // 关闭队列，saveLoop 消费完剩余消息后退出
+	<-srv.saveDone      // 等 saveLoop flush 完成
 }
 
 // logStats 周期性输出统计。V1 只输出在线数与丢消息数，V2 接入 Prometheus。
