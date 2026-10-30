@@ -24,9 +24,10 @@ import (
 const msgPrefix = "bench-msg-"
 
 var (
-	addr = flag.String("addr", "127.0.0.1:8888", "服务器地址")
-	n    = flag.Int("n", 100, "模拟客户端数量")
-	msg  = flag.Int("msg", 10, "广播消息条数")
+	addr   = flag.String("addr", "127.0.0.1:8888", "服务器地址")
+	n      = flag.Int("n", 100, "模拟客户端数量")
+	msg    = flag.Int("msg", 10, "广播消息条数")
+	settle = flag.Duration("settle", 0, "登录后到发消息前的静置时间，等上下线广播消化完")
 )
 
 // benchClient 是一个模拟客户端：一条 TCP 连接 + 一个昵称。
@@ -55,21 +56,14 @@ func (c *benchClient) login() error {
 }
 
 // receive 持续读取服务端推送，匹配到压测广播就记录端到端延迟。
-// done 关闭后最多 200ms 内退出。
-func (c *benchClient) receive(done <-chan struct{}, col *collector) {
+// 一直阻塞读，直到连接被关闭（收尾时 close conn 打断）或对端断开。
+// 不能像早期版本那样用 200ms 读超时 + 空转检查 done——那会让广播数据
+// 到达后躺在 socket 里 ~100ms 才被读走，虚高涨到压测延迟（测量 artifact）。
+func (c *benchClient) receive(col *collector) {
 	for {
-		select {
-		case <-done:
-			return
-		default:
-		}
-		_ = c.conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		m, err := protocol.ReadFrame(c.conn)
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				continue // 读超时，回到上面检查 done
-			}
-			return // 连接断开
+			return // 连接关闭或断开
 		}
 		if m.Type == protocol.TypeBroadcast && strings.HasPrefix(m.Content, msgPrefix) {
 			if seq, err := strconv.Atoi(strings.TrimPrefix(m.Content, msgPrefix)); err == nil {
@@ -183,10 +177,16 @@ func main() {
 	col := newCollector()
 	done := make(chan struct{})
 	for i, c := range success {
-		go c.receive(done, col)
+		go c.receive(col)
 		if i != 0 {
 			go c.heartbeat(done)
 		}
+	}
+
+	// 静置：等登录产生的上下线广播被各 writeLoop 消化完，再发消息，
+	// 避免 chat 排在上下线广播后面被拖慢（这里测的是纯广播延迟）。
+	if *settle > 0 {
+		time.Sleep(*settle)
 	}
 
 	// 阶段 3：第一个客户端作为发送方，连发 msg 条公聊广播。
@@ -205,8 +205,11 @@ func main() {
 		sent++
 	}
 
-	// 阶段 4：给广播留出传播时间，然后停止所有协程并汇总。
+	// 阶段 4：给广播留出传播时间，然后关闭连接打断 receive、close(done) 打断 heartbeat。
 	time.Sleep(2 * time.Second)
+	for _, c := range success {
+		_ = c.conn.Close()
+	}
 	close(done)
 
 	col.mu.Lock()
