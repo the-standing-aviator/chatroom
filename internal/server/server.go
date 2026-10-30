@@ -130,11 +130,12 @@ func (srv *Server) broadcast(from, content string) {
 }
 
 // broadcastSystem 广播一条系统提示（上下线、改名等，不持久化）。
+// 走 sendSystem 独立通道：系统消息尽力而为，不挤占业务消息的 sendCh（见 P2-3）。
 func (srv *Server) broadcastSystem(content string) {
 	m := protocol.Message{Type: protocol.TypeSystem, Content: content, TS: time.Now().Unix()}
 	srv.mu.RLock()
 	for _, s := range srv.sessions {
-		s.send(m)
+		s.sendSystem(m)
 	}
 	srv.mu.RUnlock()
 }

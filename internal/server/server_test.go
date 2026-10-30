@@ -420,3 +420,33 @@ func TestSlowClientDoesNotBlockBroadcast(t *testing.T) {
 		t.Fatalf("期望慢客户端的消息被 dropped 计数，实际 0")
 	}
 }
+
+// TestSendSystemSeparateChannel 验证系统消息走独立通道、满则静默丢弃，
+// 不挤占业务消息的 sendCh（P2-3 的核心机制）。
+func TestSendSystemSeparateChannel(t *testing.T) {
+	srv := NewServer(":0", zap.NewNop(), newFakeStore())
+
+	// net.Pipe：对端不读，writeLoop 会阻塞在写第一条系统消息上（同步内存连接）。
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	s := newSession(serverConn, srv)
+	defer s.close()
+
+	// 灌大量系统消息，远超 sysCh 缓冲(8)。满则静默丢，不计数。
+	for i := 0; i < 100; i++ {
+		s.sendSystem(protocol.Message{Type: protocol.TypeSystem, Content: "x"})
+	}
+
+	// 关键断言：业务队列 sendCh 必须为空——系统消息没有挤占 chat 的队列。
+	if got := len(s.sendCh); got != 0 {
+		t.Fatalf("sendCh 长度 = %d，期望 0（系统消息不应占用业务队列）", got)
+	}
+	// 系统队列有积压（writeLoop 拿走一条去写后阻塞，其余留在 sysCh）。
+	if got := len(s.sysCh); got == 0 {
+		t.Fatalf("sysCh 长度 = 0，期望系统消息进入独立通道")
+	}
+	// 系统消息满则静默丢，不进 dropped 计数（那是慢客户端丢业务消息的信号）。
+	if got := srv.dropped.Load(); got != 0 {
+		t.Fatalf("dropped = %d，期望 0（系统消息满则静默丢，不计数）", got)
+	}
+}
