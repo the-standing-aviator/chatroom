@@ -388,3 +388,35 @@ func TestHandleRecoverFromPanic(t *testing.T) {
 		t.Fatalf("panic 后在线表 = %v，期望 bob 能正常上线", srv.who())
 	}
 }
+
+// TestSlowClientDoesNotBlockBroadcast 验证背压隔离：一个不读的慢客户端不拖垮广播。
+// 慢客户端的 writeLoop 阻塞在写（net.Pipe 对端不读），sendCh 被填满；
+// broadcast 的 send 是非阻塞投递，满了 dropped 计数，快客户端仍正常收到全部广播。
+func TestSlowClientDoesNotBlockBroadcast(t *testing.T) {
+	srv := NewServer(":0", zap.NewNop(), newFakeStore())
+
+	// 慢客户端：登录后不再读，让它的 writeLoop 阻塞、sendCh 填满。
+	slowConn := startClient(t, srv)
+	login(t, slowConn, "slow", "secret")
+
+	// 快客户端：正常读。上线时 slow 也会收到 "fast 已上线"，但 slow 不读，
+	// 它的 writeLoop 因此阻塞在写这一条上（模拟慢消费者）。
+	fastConn := startClient(t, srv)
+	login(t, fastConn, "fast", "secret")
+
+	// fast 连发 100 条公聊，每条都要能立即收到自己的广播回显（不被 slow 拖慢）。
+	for i := 0; i < 100; i++ {
+		content := fmt.Sprintf("msg-%d", i)
+		writeFrame(t, fastConn, protocol.Message{Type: protocol.TypeChat, Content: content})
+
+		got := readFrame(t, fastConn)
+		if got.Type != protocol.TypeBroadcast || got.Content != content {
+			t.Fatalf("第 %d 条广播 = %+v，期望收到 %q", i, got, content)
+		}
+	}
+
+	// 慢客户端 sendCh(64) 被填满，多余消息被 dropped 计数——背压生效，且广播未被拖慢。
+	if dropped := srv.dropped.Load(); dropped == 0 {
+		t.Fatalf("期望慢客户端的消息被 dropped 计数，实际 0")
+	}
+}
