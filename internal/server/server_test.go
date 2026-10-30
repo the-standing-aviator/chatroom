@@ -368,18 +368,20 @@ func (p *panicStore) SaveMessage(m store.Message) error {
 	panic("boom")
 }
 
-// TestHandleRecoverFromPanic 验证 handle 的 recover 兜底：单连接处理 panic 不崩整个进程。
+// TestHandleRecoverFromPanic 验证 saveLoop 的 recover 兜底：落盘 panic 不崩整个进程。
+// 异步持久化后 SaveMessage 在 saveLoop goroutine 里执行（不再走 handle），
+// 进程级 goroutine 的 panic 若未恢复会崩掉整个进程，所以 saveOne 必须有 recover。
 func TestHandleRecoverFromPanic(t *testing.T) {
 	srv := NewServer(":0", zap.NewNop(), &panicStore{fakeStore: newFakeStore()})
 	conn := startClient(t, srv)
 	login(t, conn, "alice", "secret")
 
-	// 发公聊触发 panic：broadcast 里的 SaveMessage 会 panic（见 panicStore）。
-	// 若 handle 没有 recover 兜底，Go 里 goroutine 未恢复的 panic 会崩掉整个进程，
-	// 测试进程直接退出（FAIL）。能执行到下面，说明 panic 已被 recover 捕获。
+	// 发公聊触发 panic：broadcast 投递到 saveCh，saveLoop 消费时 SaveMessage panic（见 panicStore）。
+	// 若 saveOne 没有 recover 兜底，进程级 goroutine 的 panic 会崩掉整个测试进程。
+	// 能执行到下面，说明 panic 已被 recover 捕获。
 	writeFrame(t, conn, protocol.Message{Type: protocol.TypeChat, Content: "boom"})
 
-	// 验证服务器仍能服务新连接：panic 是单连接级，不应影响进程级状态。
+	// 验证服务器仍能服务新连接：落盘 panic 是单条消息级，不应影响进程级状态。
 	conn2 := startClient(t, srv)
 	login(t, conn2, "bob", "secret")
 	if !contains(srv.who(), "bob") {
