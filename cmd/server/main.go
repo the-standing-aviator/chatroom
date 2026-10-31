@@ -4,6 +4,7 @@ package main
 import (
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8888", "监听地址")
 	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径")
+	metricsAddr := flag.String("metrics", ":9090", "Prometheus /metrics 监听地址")
 	flag.Parse()
 
 	logger, err := zap.NewProduction()
@@ -32,6 +34,17 @@ func main() {
 	defer st.Close()
 
 	srv := server.NewServer(*addr, logger, st)
+
+	// 可观测：注册指标并起独立 HTTP 端口暴露 /metrics，供 Prometheus 定期拉取。
+	server.RegisterMetrics(srv)
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", server.MetricsHandler())
+		logger.Info("metrics server started", zap.String("addr", *metricsAddr))
+		if err := http.ListenAndServe(*metricsAddr, mux); err != nil {
+			logger.Error("metrics server failed", zap.Error(err))
+		}
+	}()
 
 	// 监听退出信号，触发优雅关闭：flush 持久化队列后退出，正常关闭不丢消息。
 	sigCh := make(chan os.Signal, 1)
