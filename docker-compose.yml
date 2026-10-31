@@ -1,0 +1,25 @@
+# 开发环境依赖编排：V3 分布式阶段所需的外部服务。
+# 用法：docker compose up -d   （后台启动全部服务）
+#       docker compose down     （停止并移除容器，保留数据卷）
+#
+# 说明：凭据 chat/chat 仅供本地开发，勿用于生产。
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: communicate-postgres
+    environment:
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: chat
+      POSTGRES_DB: chat
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat -d chat"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
