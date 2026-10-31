@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	_ "net/http/pprof" // 仅副作用：init 里把 /debug/pprof/* 注册到 DefaultServeMux
 	"os"
 	"os/signal"
 	"syscall"
@@ -36,13 +37,13 @@ func main() {
 
 	srv := server.NewServer(*addr, logger, st)
 
-	// 可观测：注册指标并起独立 HTTP 端口暴露 /metrics，供 Prometheus 定期拉取。
+	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
+	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。
 	server.RegisterMetrics(prometheus.DefaultRegisterer, srv)
+	http.Handle("/metrics", server.MetricsHandler())
 	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", server.MetricsHandler())
 		logger.Info("metrics server started", zap.String("addr", *metricsAddr))
-		if err := http.ListenAndServe(*metricsAddr, mux); err != nil {
+		if err := http.ListenAndServe(*metricsAddr, nil); err != nil { // nil → DefaultServeMux
 			logger.Error("metrics server failed", zap.Error(err))
 		}
 	}()
