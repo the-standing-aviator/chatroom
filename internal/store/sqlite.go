@@ -60,7 +60,7 @@ func (s *SQLite) CreateUser(name, passwordHash string) error {
 		`INSERT INTO users (name, password_hash, created_at) VALUES (?, ?, ?)`,
 		name, passwordHash, time.Now().Unix(),
 	)
-	if err != nil && isUniqueViolation(err) {
+	if err != nil && isSQLiteUniqueViolation(err) {
 		return ErrConflict
 	}
 	return err
@@ -120,8 +120,8 @@ func (s *SQLite) Close() error {
 	return s.db.Close()
 }
 
-// isUniqueViolation 判断错误是否由唯一约束冲突引起。
+// isSQLiteUniqueViolation 判断错误是否由唯一约束冲突引起。
 // modernc.org/sqlite 返回的错误文本形如 "UNIQUE constraint failed: users.name"。
-func isUniqueViolation(err error) bool {
+func isSQLiteUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
