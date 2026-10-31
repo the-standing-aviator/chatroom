@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"communicate/internal/server"
@@ -36,7 +37,7 @@ func main() {
 	srv := server.NewServer(*addr, logger, st)
 
 	// 可观测：注册指标并起独立 HTTP 端口暴露 /metrics，供 Prometheus 定期拉取。
-	server.RegisterMetrics(srv)
+	server.RegisterMetrics(prometheus.DefaultRegisterer, srv)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", server.MetricsHandler())
