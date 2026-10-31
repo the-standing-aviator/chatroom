@@ -3,6 +3,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	_ "net/http/pprof" // 仅副作用：init 里把 /debug/pprof/* 注册到 DefaultServeMux
@@ -19,7 +20,9 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8888", "监听地址")
-	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径")
+	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径（-store sqlite 时使用）")
+	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
+	dsn := flag.String("dsn", "postgres://chat:chat@localhost:5432/chat?sslmode=disable", "PostgreSQL DSN（-store postgres 时使用）")
 	metricsAddr := flag.String("metrics", ":9090", "Prometheus /metrics 监听地址")
 	flag.Parse()
 
@@ -29,7 +32,7 @@ func main() {
 	}
 	defer logger.Sync()
 
-	st, err := store.Open(*dbPath)
+	st, err := openStore(*storeType, *dbPath, *dsn)
 	if err != nil {
 		logger.Fatal("open store failed", zap.Error(err))
 	}
@@ -65,4 +68,17 @@ func main() {
 	}
 	<-done // 等 Shutdown flush 完成
 	logger.Info("shutdown complete")
+}
+
+// openStore 按 -store 选择存储后端，返回 Store 接口实现。
+// 服务端只依赖接口，不关心底层是 SQLite 还是 PostgreSQL。
+func openStore(kind, dbPath, dsn string) (store.Store, error) {
+	switch kind {
+	case "sqlite":
+		return store.Open(dbPath)
+	case "postgres":
+		return store.OpenPostgres(dsn)
+	default:
+		return nil, fmt.Errorf("unknown store type %q (want sqlite | postgres)", kind)
+	}
 }
