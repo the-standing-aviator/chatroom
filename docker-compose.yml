@@ -21,5 +21,22 @@ services:
       timeout: 3s
       retries: 5
 
+  nats:
+    image: nats:2.10-alpine
+    container_name: communicate-nats
+    ports:
+      - "4222:4222" # 客户端连接端口（core NATS，不用 JetStream）
+
+  redis:
+    image: redis:7-alpine
+    container_name: communicate-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 volumes:
   pgdata:
