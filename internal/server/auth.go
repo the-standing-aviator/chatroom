@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 
+	"communicate/internal/auth"
 	"communicate/internal/protocol"
 	"communicate/internal/store"
 )
@@ -20,6 +21,11 @@ func (srv *Server) authenticate(s *Session) bool {
 	if err != nil {
 		return false
 	}
+	// 免密重连：auth_token 帧走 token 校验路径，身份以 token 的 sub 为准。
+	if m.Type == protocol.TypeAuthToken {
+		return srv.authenticateToken(s, m)
+	}
+
 	if m.Type != protocol.TypeAuth {
 		s.send(protocol.Message{Type: protocol.TypeError, Error: "请先登录（auth）"})
 		return false
@@ -66,6 +72,28 @@ func (srv *Server) authenticate(s *Session) bool {
 		s.send(protocol.Message{Type: protocol.TypeSystem, Content: "登录成功，欢迎 " + name, Token: srv.issueToken(name), TS: time.Now().Unix()})
 		return true
 	}
+}
+
+// authenticateToken 处理免密重连：校验 JWT，用 token 里的 sub 作为昵称，随后复用
+// handle 的 addSession 上线流程。不查 store、不做 bcrypt——签名与有效期即身份证明
+// （无状态鉴权）。成功后 re-issue 一个新 token，实现滑动过期。
+func (srv *Server) authenticateToken(s *Session, m protocol.Message) bool {
+	if m.Token == "" {
+		s.send(protocol.Message{Type: protocol.TypeError, Error: "缺少 token"})
+		return false
+	}
+	name, err := srv.auth.Verify(m.Token)
+	if err != nil {
+		if errors.Is(err, auth.ErrExpired) {
+			s.send(protocol.Message{Type: protocol.TypeError, Error: "token 已过期，请重新登录"})
+		} else {
+			s.send(protocol.Message{Type: protocol.TypeError, Error: "token 无效，请重新登录"})
+		}
+		return false
+	}
+	s.setName(name)
+	s.send(protocol.Message{Type: protocol.TypeSystem, Content: "已重连，欢迎 " + name, Token: srv.issueToken(name), TS: time.Now().Unix()})
+	return true
 }
 
 // issueToken 为已通过密码校验的用户签发 JWT。失败时记录日志并返回空串，

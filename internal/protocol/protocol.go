@@ -51,13 +51,14 @@ type Message struct {
 
 // 客户端 → 服务端的消息类型。
 const (
-	TypeAuth      = "auth"      // 登录/注册：Name + Password
-	TypeChat      = "chat"      // 公聊：Content
-	TypePrivate   = "private"   // 私聊：To + Content
-	TypeRename    = "rename"    // 改名：NewName
-	TypeWho       = "who"       // 查看在线列表
-	TypeHistory   = "history"   // 查看历史消息：Limit
-	TypeHeartbeat = "heartbeat" // 心跳保活
+	TypeAuth      = "auth"       // 登录/注册：Name + Password
+	TypeAuthToken = "auth_token" // 免密重连：Token（身份以 token 的 sub 为准）
+	TypeChat      = "chat"       // 公聊：Content
+	TypePrivate   = "private"    // 私聊：To + Content
+	TypeRename    = "rename"     // 改名：NewName
+	TypeWho       = "who"        // 查看在线列表
+	TypeHistory   = "history"    // 查看历史消息：Limit
+	TypeHeartbeat = "heartbeat"  // 心跳保活
 )
 
 // 服务端 → 客户端的消息类型。

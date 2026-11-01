@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
 
 	"communicate/internal/auth"
 	"communicate/internal/presence"
@@ -224,6 +224,68 @@ func TestHandleLoginWrongPassword(t *testing.T) {
 	}
 	if len(srv.who()) != 0 {
 		t.Fatalf("在线表 = %v，期望为空", srv.who())
+	}
+}
+
+// TestHandleAuthTokenReconnect 验证免密重连：凭有效 JWT 上线，不查 store、不校验密码，
+// 身份以 token 的 sub 为准，成功后 re-issue 新 token（滑动过期）。
+func TestHandleAuthTokenReconnect(t *testing.T) {
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour))
+	conn := startClient(t, srv)
+
+	// 直接用 Manager 签发一个 alice 的 token，模拟此前登录拿到的凭据。
+	token, err := srv.auth.Issue("alice")
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	writeFrame(t, conn, protocol.Message{Type: protocol.TypeAuthToken, Token: token})
+
+	first := readFrame(t, conn)
+	if first.Type != protocol.TypeSystem || first.Content != "已重连，欢迎 alice" {
+		t.Fatalf("第一条响应 = %+v，期望「已重连，欢迎 alice」", first)
+	}
+	if first.Token == "" {
+		t.Fatalf("重连成功应 re-issue 新 token，实际为空")
+	}
+	if name, err := srv.auth.Verify(first.Token); err != nil || name != "alice" {
+		t.Fatalf("新 token 校验 = %q, %v; want (alice, nil)", name, err)
+	}
+
+	second := readFrame(t, conn)
+	if second.Type != protocol.TypeSystem || second.Content != "alice 已上线" {
+		t.Fatalf("第二条响应 = %+v，期望「已上线」system", second)
+	}
+	if !contains(srv.who(), "alice") {
+		t.Fatalf("在线表 = %v，期望包含 alice", srv.who())
+	}
+}
+
+// TestHandleAuthTokenRejectsInvalid 验证非法/过期 token 被拒绝，不进入上线流程。
+func TestHandleAuthTokenRejectsInvalid(t *testing.T) {
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour))
+
+	// 非法 token：签名/结构对不上。
+	conn := startClient(t, srv)
+	writeFrame(t, conn, protocol.Message{Type: protocol.TypeAuthToken, Token: "garbage"})
+	resp := readFrame(t, conn)
+	if resp.Type != protocol.TypeError || resp.Error != "token 无效，请重新登录" {
+		t.Fatalf("非法 token 响应 = %+v，期望「token 无效」error", resp)
+	}
+
+	// 过期 token：同 secret、负 TTL 签发的 token 已过期，应提示过期。
+	expired, err := auth.New("test-secret", -time.Hour).Issue("alice")
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	conn2 := startClient(t, srv)
+	writeFrame(t, conn2, protocol.Message{Type: protocol.TypeAuthToken, Token: expired})
+	resp2 := readFrame(t, conn2)
+	if resp2.Type != protocol.TypeError || resp2.Error != "token 已过期，请重新登录" {
+		t.Fatalf("过期 token 响应 = %+v，期望「token 已过期」error", resp2)
+	}
+	if len(srv.who()) != 0 {
+		t.Fatalf("在线表 = %v，期望为空（拒绝后不应上线）", srv.who())
 	}
 }
 
