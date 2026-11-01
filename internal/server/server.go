@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"communicate/internal/presence"
 	"communicate/internal/protocol"
 	"communicate/internal/store"
 )
@@ -28,7 +29,8 @@ type Server struct {
 	store store.Store
 
 	mu       sync.RWMutex
-	sessions map[string]*Session // 以昵称为键的在线会话表
+	sessions map[string]*Session // 本地投递表：昵称 → 本节点持有的会话
+	presence presence.Presence   // 在线登记表：昵称 → 节点，可外置（内存/Redis）
 
 	saveCh   chan store.Message // 持久化队列：广播先入队，saveLoop 后台落盘
 	saveDone chan struct{}      // saveLoop 退出信号，优雅关闭时靠它等 flush 完成
@@ -39,7 +41,8 @@ type Server struct {
 }
 
 // NewServer 创建一个服务器实例。log 可为 nil（内部用 zap.NewNop 兜底）。
-func NewServer(addr string, log *zap.Logger, st store.Store) *Server {
+// p 是在线登记表实现：单机/单测传内存实现，分布式传 Redis 实现（ports & adapters）。
+func NewServer(addr string, log *zap.Logger, st store.Store, p presence.Presence) *Server {
 	if log == nil {
 		log = zap.NewNop()
 	}
@@ -47,6 +50,7 @@ func NewServer(addr string, log *zap.Logger, st store.Store) *Server {
 		addr:     addr,
 		log:      log,
 		store:    st,
+		presence: p,
 		sessions: make(map[string]*Session),
 		saveCh:   make(chan store.Message, 1024),
 		saveDone: make(chan struct{}),
@@ -158,50 +162,55 @@ func (srv *Server) private(from, to, content string) bool {
 }
 
 // rename 修改会话昵称。新昵称已被占用时返回 error。
+// 用 presence.Rename 原子判断「旧名在线 + 新名空闲」并搬移，避免并发改名竞态；
+// 成功后再同步本地投递表与会话自身昵称。
 func (srv *Server) rename(s *Session, newName string) error {
-	srv.mu.Lock()
-	defer srv.mu.Unlock()
-
-	if _, ok := srv.sessions[newName]; ok {
-		return fmt.Errorf("昵称 %q 已被使用", newName)
+	old := s.Name()
+	if err := srv.presence.Rename(old, newName); err != nil {
+		if errors.Is(err, presence.ErrConflict) {
+			return fmt.Errorf("昵称 %q 已被使用", newName)
+		}
+		return err
 	}
-	delete(srv.sessions, s.Name())
+
+	srv.mu.Lock()
+	delete(srv.sessions, old)
 	s.setName(newName)
 	srv.sessions[newName] = s
+	srv.mu.Unlock()
 	return nil
 }
 
-// who 返回当前所有在线用户的昵称列表。
+// who 返回当前所有在线用户的昵称列表（读在线登记表，跨节点全局视角）。
 func (srv *Server) who() []string {
-	srv.mu.RLock()
-	defer srv.mu.RUnlock()
-
-	names := make([]string, 0, len(srv.sessions))
-	for name := range srv.sessions {
-		names = append(names, name)
+	names, err := srv.presence.Online()
+	if err != nil {
+		srv.log.Error("presence online failed", zap.Error(err))
+		return []string{}
 	}
 	return names
 }
 
-// addSession 把会话加入在线表。若昵称已在线返回 false。
-func (srv *Server) addSession(s *Session) bool {
-	srv.mu.Lock()
-	defer srv.mu.Unlock()
-
-	if _, ok := srv.sessions[s.Name()]; ok {
-		return false
+// addSession 把会话登记进在线状态。用 presence.Join 做「全局唯一」判断：
+// 已在线（ErrConflict）或登记失败时返回错误；成功后把会话放进本地投递表供本节点投递。
+func (srv *Server) addSession(s *Session) error {
+	if err := srv.presence.Join(s.Name(), srv.addr); err != nil {
+		return err
 	}
+	srv.mu.Lock()
 	srv.sessions[s.Name()] = s
-	return true
+	srv.mu.Unlock()
+	return nil
 }
 
-// removeSession 把会话移出在线表（仅当该昵称仍指向此会话时）。
+// removeSession 把会话移出本地投递表（仅当该昵称仍指向此会话时），并注销在线登记。
 func (srv *Server) removeSession(s *Session) {
 	srv.mu.Lock()
 	if cur, ok := srv.sessions[s.Name()]; ok && cur == s {
 		delete(srv.sessions, s.Name())
 	}
 	srv.mu.Unlock()
+	_ = srv.presence.Leave(s.Name())
 }
 
 // Shutdown 优雅关闭：停止接收新连接，关闭所有会话，并 flush 持久化队列。

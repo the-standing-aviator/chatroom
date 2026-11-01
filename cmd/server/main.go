@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
+	"communicate/internal/presence"
 	"communicate/internal/server"
 	"communicate/internal/store"
 )
@@ -38,7 +39,7 @@ func main() {
 	}
 	defer st.Close()
 
-	srv := server.NewServer(*addr, logger, st)
+	srv := server.NewServer(*addr, logger, st, presence.NewMemory())
 
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。

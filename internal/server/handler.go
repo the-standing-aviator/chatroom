@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"runtime/debug"
@@ -8,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"communicate/internal/presence"
 	"communicate/internal/protocol"
 	"communicate/internal/store"
 )
@@ -33,9 +35,14 @@ func (srv *Server) handle(conn net.Conn) {
 		return
 	}
 
-	// 加入在线表（昵称唯一性在此保证）
-	if !srv.addSession(sess) {
-		sess.send(protocol.Message{Type: protocol.TypeError, Error: "该用户已在线"})
+	// 加入在线表（昵称唯一性由 presence.Join 保证）
+	if err := srv.addSession(sess); err != nil {
+		if errors.Is(err, presence.ErrConflict) {
+			sess.send(protocol.Message{Type: protocol.TypeError, Error: "该用户已在线"})
+		} else {
+			srv.log.Error("add session failed", zap.Error(err))
+			sess.send(protocol.Message{Type: protocol.TypeError, Error: "上线失败，请稍后重试"})
+		}
 		sess.setName("") // 复位，避免 close 时误广播"已下线"
 		return
 	}

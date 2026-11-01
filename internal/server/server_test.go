@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"go.uber.org/zap"
 
+	"communicate/internal/presence"
 	"communicate/internal/protocol"
 	"communicate/internal/store"
 )
@@ -147,7 +148,7 @@ func seedUser(t *testing.T, st store.Store, name, password string) {
 
 // TestHandleRegisterAndJoin 验证端到端：新用户 auth 注册 → 加入在线表 → 广播上线（FR-5）。
 func TestHandleRegisterAndJoin(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore())
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory())
 	conn := startClient(t, srv)
 
 	// 客户端发 auth 帧（新用户，触发注册）
@@ -175,7 +176,7 @@ func TestHandleRegisterAndJoin(t *testing.T) {
 func TestHandleLoginExistingUser(t *testing.T) {
 	st := newFakeStore()
 	seedUser(t, st, "alice", "secret")
-	srv := NewServer(":0", zap.NewNop(), st)
+	srv := NewServer(":0", zap.NewNop(), st, presence.NewMemory())
 
 	conn := startClient(t, srv)
 	writeFrame(t, conn, protocol.Message{Type: protocol.TypeAuth, Name: "alice", Password: "secret"})
@@ -197,7 +198,7 @@ func TestHandleLoginExistingUser(t *testing.T) {
 func TestHandleLoginWrongPassword(t *testing.T) {
 	st := newFakeStore()
 	seedUser(t, st, "alice", "secret")
-	srv := NewServer(":0", zap.NewNop(), st)
+	srv := NewServer(":0", zap.NewNop(), st, presence.NewMemory())
 
 	conn := startClient(t, srv)
 	writeFrame(t, conn, protocol.Message{Type: protocol.TypeAuth, Name: "alice", Password: "wrong"})
@@ -213,7 +214,7 @@ func TestHandleLoginWrongPassword(t *testing.T) {
 
 // TestRouteRejectsBadInput 验证：非法输入返回 error 消息而非 panic（对应 P1-1 的修复）。
 func TestRouteRejectsBadInput(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore())
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory())
 	s := &Session{server: srv, sendCh: make(chan protocol.Message, 64)}
 
 	cases := []struct {
@@ -288,7 +289,7 @@ func login(t *testing.T, conn net.Conn, name, password string) {
 
 // TestPrivateMessage 验证端到端私聊：alice 私聊 bob，bob 收到（FR-2）。
 func TestPrivateMessage(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore())
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory())
 
 	connA := startClient(t, srv)
 	login(t, connA, "alice", "secret")
@@ -314,7 +315,7 @@ func TestPrivateMessage(t *testing.T) {
 
 // TestRename 验证改名成功与重名冲突（FR-3）。
 func TestRename(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore())
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory())
 
 	connA := startClient(t, srv)
 	login(t, connA, "alice", "secret")
@@ -372,7 +373,7 @@ func (p *panicStore) SaveMessage(m store.Message) error {
 // 异步持久化后 SaveMessage 在 saveLoop goroutine 里执行（不再走 handle），
 // 进程级 goroutine 的 panic 若未恢复会崩掉整个进程，所以 saveOne 必须有 recover。
 func TestHandleRecoverFromPanic(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), &panicStore{fakeStore: newFakeStore()})
+	srv := NewServer(":0", zap.NewNop(), &panicStore{fakeStore: newFakeStore()}, presence.NewMemory())
 	conn := startClient(t, srv)
 	login(t, conn, "alice", "secret")
 
@@ -393,7 +394,7 @@ func TestHandleRecoverFromPanic(t *testing.T) {
 // 慢客户端的 writeLoop 阻塞在写（net.Pipe 对端不读），sendCh 被填满；
 // broadcast 的 send 是非阻塞投递，满了 dropped 计数，快客户端仍正常收到全部广播。
 func TestSlowClientDoesNotBlockBroadcast(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore())
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory())
 
 	// 慢客户端：登录后不再读，让它的 writeLoop 阻塞、sendCh 填满。
 	slowConn := startClient(t, srv)
@@ -424,7 +425,7 @@ func TestSlowClientDoesNotBlockBroadcast(t *testing.T) {
 // TestSendSystemSeparateChannel 验证系统消息走独立通道、满则静默丢弃，
 // 不挤占业务消息的 sendCh（P2-3 的核心机制）。
 func TestSendSystemSeparateChannel(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore())
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory())
 
 	// net.Pipe：对端不读，writeLoop 会阻塞在写第一条系统消息上（同步内存连接）。
 	serverConn, clientConn := net.Pipe()
