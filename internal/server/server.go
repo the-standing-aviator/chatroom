@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"communicate/internal/auth"
 	"communicate/internal/presence"
 	"communicate/internal/protocol"
 	"communicate/internal/store"
@@ -31,6 +32,7 @@ type Server struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session // 本地投递表：昵称 → 本节点持有的会话
 	presence presence.Presence   // 在线登记表：昵称 → 节点，可外置（内存/Redis）
+	auth     *auth.Manager       // JWT 签发/校验（无状态 token）
 
 	saveCh   chan store.Message // 持久化队列：广播先入队，saveLoop 后台落盘
 	saveDone chan struct{}      // saveLoop 退出信号，优雅关闭时靠它等 flush 完成
@@ -41,8 +43,8 @@ type Server struct {
 }
 
 // NewServer 创建一个服务器实例。log 可为 nil（内部用 zap.NewNop 兜底）。
-// p 是在线登记表实现：单机/单测传内存实现，分布式传 Redis 实现（ports & adapters）。
-func NewServer(addr string, log *zap.Logger, st store.Store, p presence.Presence) *Server {
+// p 是在线登记表实现（内存/Redis），am 是 JWT 签发/校验器（ports & adapters）。
+func NewServer(addr string, log *zap.Logger, st store.Store, p presence.Presence, am *auth.Manager) *Server {
 	if log == nil {
 		log = zap.NewNop()
 	}
@@ -51,6 +53,7 @@ func NewServer(addr string, log *zap.Logger, st store.Store, p presence.Presence
 		log:      log,
 		store:    st,
 		presence: p,
+		auth:     am,
 		sessions: make(map[string]*Session),
 		saveCh:   make(chan store.Message, 1024),
 		saveDone: make(chan struct{}),

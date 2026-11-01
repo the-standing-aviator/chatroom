@@ -49,7 +49,7 @@ func (srv *Server) authenticate(s *Session) bool {
 			return false
 		}
 		s.setName(name)
-		s.send(protocol.Message{Type: protocol.TypeSystem, Content: "注册成功，欢迎 " + name, TS: time.Now().Unix()})
+		s.send(protocol.Message{Type: protocol.TypeSystem, Content: "注册成功，欢迎 " + name, Token: srv.issueToken(name), TS: time.Now().Unix()})
 		return true
 
 	case err != nil:
@@ -63,9 +63,20 @@ func (srv *Server) authenticate(s *Session) bool {
 			return false
 		}
 		s.setName(name)
-		s.send(protocol.Message{Type: protocol.TypeSystem, Content: "登录成功，欢迎 " + name, TS: time.Now().Unix()})
+		s.send(protocol.Message{Type: protocol.TypeSystem, Content: "登录成功，欢迎 " + name, Token: srv.issueToken(name), TS: time.Now().Unix()})
 		return true
 	}
+}
+
+// issueToken 为已通过密码校验的用户签发 JWT。失败时记录日志并返回空串，
+// 不让 token 签发失败阻断登录（V3.3 之前 token 尚不参与鉴权校验）。
+func (srv *Server) issueToken(name string) string {
+	token, err := srv.auth.Issue(name)
+	if err != nil {
+		srv.log.Error("issue token failed", zap.Error(err))
+		return ""
+	}
+	return token
 }
 
 // trimName 规范化昵称：去掉首尾空白并限制长度。

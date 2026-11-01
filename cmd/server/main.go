@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
+	"communicate/internal/auth"
 	"communicate/internal/presence"
 	"communicate/internal/server"
 	"communicate/internal/store"
@@ -27,6 +29,8 @@ func main() {
 	metricsAddr := flag.String("metrics", ":9090", "Prometheus /metrics 监听地址")
 	presenceType := flag.String("presence", "memory", "在线状态后端：memory | redis")
 	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis 地址（-presence redis 时使用）")
+	jwtSecret := flag.String("jwt-secret", "dev-secret-change-me", "JWT 签名密钥（生产务必覆盖）")
+	jwtTTL := flag.Duration("jwt-ttl", 24*time.Hour, "JWT 有效期")
 	flag.Parse()
 
 	logger, err := zap.NewProduction()
@@ -47,7 +51,9 @@ func main() {
 	}
 	defer p.Close()
 
-	srv := server.NewServer(*addr, logger, st, p)
+	am := auth.New(*jwtSecret, *jwtTTL)
+
+	srv := server.NewServer(*addr, logger, st, p, am)
 
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。

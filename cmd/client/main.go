@@ -21,8 +21,9 @@ func init() {
 
 // Client 是聊天室客户端。
 type Client struct {
-	conn net.Conn
-	done chan struct{} // 主动退出信号：receive 用它区分主动退出与异常断开
+	conn  net.Conn
+	done  chan struct{} // 主动退出信号：receive 用它区分主动退出与异常断开
+	token string        // 登录成功后服务端签发的 JWT（V3.3 重连时用）
 }
 
 func main() {
@@ -62,6 +63,7 @@ func (c *Client) run() {
 		fmt.Println("登录失败:", resp.Error)
 		return
 	}
+	c.token = resp.Token // 存下 JWT（V3.3 重连时凭它免密鉴权）
 	fmt.Println(resp.Content)
 
 	c.done = make(chan struct{})

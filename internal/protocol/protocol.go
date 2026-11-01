@@ -25,6 +25,7 @@ type Message struct {
 	// 鉴权（auth）
 	Name     string `json:"name,omitempty"`
 	Password string `json:"password,omitempty"`
+	Token    string `json:"token,omitempty"` // 登录成功后服务端签发的 JWT（V3.3 重连用）
 
 	// 聊天（chat / private / broadcast）
 	From    string `json:"from,omitempty"`
