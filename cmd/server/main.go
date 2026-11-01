@@ -25,6 +25,8 @@ func main() {
 	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
 	dsn := flag.String("dsn", "postgres://chat:chat@localhost:5432/chat?sslmode=disable", "PostgreSQL DSN（-store postgres 时使用）")
 	metricsAddr := flag.String("metrics", ":9090", "Prometheus /metrics 监听地址")
+	presenceType := flag.String("presence", "memory", "在线状态后端：memory | redis")
+	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis 地址（-presence redis 时使用）")
 	flag.Parse()
 
 	logger, err := zap.NewProduction()
@@ -39,7 +41,13 @@ func main() {
 	}
 	defer st.Close()
 
-	srv := server.NewServer(*addr, logger, st, presence.NewMemory())
+	p, err := openPresence(*presenceType, *redisAddr)
+	if err != nil {
+		logger.Fatal("open presence failed", zap.Error(err))
+	}
+	defer p.Close()
+
+	srv := server.NewServer(*addr, logger, st, p)
 
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。
@@ -81,5 +89,18 @@ func openStore(kind, dbPath, dsn string) (store.Store, error) {
 		return store.OpenPostgres(dsn)
 	default:
 		return nil, fmt.Errorf("unknown store type %q (want sqlite | postgres)", kind)
+	}
+}
+
+// openPresence 按 -presence 选择在线状态后端，返回 Presence 接口实现。
+// 服务端只依赖接口，不关心底层是内存还是 Redis（ports & adapters）。
+func openPresence(kind, addr string) (presence.Presence, error) {
+	switch kind {
+	case "memory":
+		return presence.NewMemory(), nil
+	case "redis":
+		return presence.NewRedis(addr), nil
+	default:
+		return nil, fmt.Errorf("unknown presence type %q (want memory | redis)", kind)
 	}
 }
