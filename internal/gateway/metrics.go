@@ -1,4 +1,4 @@
-package server
+package gateway
 
 import (
 	"net/http"
@@ -11,26 +11,26 @@ import (
 // RegisterMetrics 把聊天室指标注册进给定的 registerer。
 //
 // 接受 prometheus.Registerer 而非写死默认 registry：生产传 prometheus.DefaultRegisterer，
-// 测试传独立的 NewRegistry，避免重复注册同名指标 panic（每个测试各建一个 Server）。
+// 测试传独立的 NewRegistry，避免重复注册同名指标 panic（每个测试各建一个 Gateway）。
 //
 // 用 GaugeFunc/CounterFunc 而不是普通 Gauge/Counter：前者在每次 scrape 时
-// 才调用闭包读取实时值，因此直接复用 Server 已有的状态（sessions 表、dropped
+// 才调用闭包读取实时值，因此直接复用 Gateway 已有的状态（sessions 表、dropped
 // 计数、runtime.NumGoroutine），无需在业务路径上额外埋点。
-func RegisterMetrics(reg prometheus.Registerer, srv *Server) {
+func RegisterMetrics(reg prometheus.Registerer, gw *Gateway) {
 	reg.MustRegister(
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "chat_online",
 			Help: "当前在线客户端数量",
 		}, func() float64 {
-			srv.mu.RLock()
-			defer srv.mu.RUnlock()
-			return float64(len(srv.sessions))
+			gw.mu.RLock()
+			defer gw.mu.RUnlock()
+			return float64(len(gw.sessions))
 		}),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{
 			Name: "chat_dropped_messages_total",
 			Help: "因发送队列满被丢弃的消息总数（背压触发信号）",
 		}, func() float64 {
-			return float64(srv.dropped.Load())
+			return float64(gw.dropped.Load())
 		}),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "chat_goroutines",

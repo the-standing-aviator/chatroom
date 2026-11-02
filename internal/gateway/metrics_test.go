@@ -1,4 +1,4 @@
-package server
+package gateway
 
 import (
 	"net"
@@ -44,16 +44,16 @@ func metricValue(t *testing.T, reg *prometheus.Registry, name string) float64 {
 
 // TestMetricsOnlineCount 验证指标从实时状态读取：登录后 chat_online 变 1，goroutines > 0。
 func TestMetricsOnlineCount(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 	reg := prometheus.NewRegistry()
-	RegisterMetrics(reg, srv)
+	RegisterMetrics(reg, gw)
 
 	if got := metricValue(t, reg, "chat_online"); got != 0 {
 		t.Fatalf("初始 online = %v，期望 0", got)
 	}
 
 	// 一个客户端登录 → 在线数 +1。
-	conn := startClient(t, srv)
+	conn := startClient(t, gw)
 	login(t, conn, "alice", "secret")
 
 	if got := metricValue(t, reg, "chat_online"); got != 1 {
@@ -68,9 +68,9 @@ func TestMetricsOnlineCount(t *testing.T) {
 
 // TestMetricsDroppedCounter 验证 dropped 计数被暴露为指标：慢会话 sendCh 填满后数值增加。
 func TestMetricsDroppedCounter(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 	reg := prometheus.NewRegistry()
-	RegisterMetrics(reg, srv)
+	RegisterMetrics(reg, gw)
 
 	if got := metricValue(t, reg, "chat_dropped_messages_total"); got != 0 {
 		t.Fatalf("初始 dropped = %v，期望 0", got)
@@ -79,7 +79,7 @@ func TestMetricsDroppedCounter(t *testing.T) {
 	// 慢会话：net.Pipe 对端不读，writeLoop 阻塞在写第一条，sendCh 被后续消息填满。
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
-	s := newSession(serverConn, srv)
+	s := newSession(serverConn, gw)
 	defer s.close()
 
 	// 灌超过 sendCh(64) 的消息：前 65 条（1 条在写 + 64 缓冲）消化后，其余被 dropped 计数。

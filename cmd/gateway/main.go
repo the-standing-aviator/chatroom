@@ -1,4 +1,4 @@
-// 聊天室服务端入口：初始化日志与存储，启动服务器。
+// 聊天室接入节点（gateway）入口：初始化日志与存储，启动接入节点。
 package main
 
 import (
@@ -17,8 +17,8 @@ import (
 
 	"communicate/internal/auth"
 	"communicate/internal/bus"
+	"communicate/internal/gateway"
 	"communicate/internal/presence"
-	"communicate/internal/server"
 	"communicate/internal/store"
 )
 
@@ -62,16 +62,16 @@ func main() {
 	}
 	defer b.Close()
 
-	srv := server.NewServer(*addr, logger, st, p, am, b)
+	gw := gateway.NewGateway(*addr, logger, st, p, am, b)
 
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。
-	server.RegisterMetrics(prometheus.DefaultRegisterer, srv)
-	http.Handle("/metrics", server.MetricsHandler())
+	gateway.RegisterMetrics(prometheus.DefaultRegisterer, gw)
+	http.Handle("/metrics", gateway.MetricsHandler())
 	go func() {
 		logger.Info("metrics server started", zap.String("addr", *metricsAddr))
 		if err := http.ListenAndServe(*metricsAddr, nil); err != nil { // nil → DefaultServeMux
-			logger.Error("metrics server failed", zap.Error(err))
+			logger.Error("metrics gateway failed", zap.Error(err))
 		}
 	}()
 
@@ -83,12 +83,12 @@ func main() {
 	go func() {
 		sig := <-sigCh
 		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
-		srv.Shutdown()
+		gw.Shutdown()
 		close(done)
 	}()
 
-	if err := srv.Start(); err != nil {
-		logger.Fatal("server failed", zap.Error(err))
+	if err := gw.Start(); err != nil {
+		logger.Fatal("gateway failed", zap.Error(err))
 	}
 	<-done // 等 Shutdown flush 完成
 	logger.Info("shutdown complete")

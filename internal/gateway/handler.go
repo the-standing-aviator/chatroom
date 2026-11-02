@@ -1,4 +1,4 @@
-package server
+package gateway
 
 import (
 	"errors"
@@ -15,11 +15,11 @@ import (
 )
 
 // handle 处理一个客户端连接：鉴权 → 加入在线表 → 读循环路由消息。
-func (srv *Server) handle(conn net.Conn) {
+func (gw *Gateway) handle(conn net.Conn) {
 	// recover 兜底：单连接处理 panic 只影响该连接，不崩整个进程（修复 P1-1）。
 	defer func() {
 		if r := recover(); r != nil {
-			srv.log.Error("panic in handler",
+			gw.log.Error("panic in handler",
 				zap.Any("panic", r),
 				zap.String("stack", string(debug.Stack())),
 			)
@@ -27,27 +27,27 @@ func (srv *Server) handle(conn net.Conn) {
 		// 连接由 writeLoop 在 flush 完发送队列后统一关闭（优雅关闭），这里不再直接关。
 	}()
 
-	sess := newSession(conn, srv)
+	sess := newSession(conn, gw)
 	defer sess.close()
 
 	// 鉴权
-	if !srv.authenticate(sess) {
+	if !gw.authenticate(sess) {
 		return
 	}
 
 	// 加入在线表（昵称唯一性由 presence.Join 保证）
-	if err := srv.addSession(sess); err != nil {
+	if err := gw.addSession(sess); err != nil {
 		if errors.Is(err, presence.ErrConflict) {
 			sess.send(protocol.Message{Type: protocol.TypeError, Error: "该用户已在线"})
 		} else {
-			srv.log.Error("add session failed", zap.Error(err))
+			gw.log.Error("add session failed", zap.Error(err))
 			sess.send(protocol.Message{Type: protocol.TypeError, Error: "上线失败，请稍后重试"})
 		}
 		sess.setName("") // 复位，避免 close 时误广播"已下线"
 		return
 	}
-	srv.log.Info("user online", zap.String("name", sess.Name()), zap.String("addr", conn.RemoteAddr().String()))
-	srv.broadcastSystem(fmt.Sprintf("%s 已上线", sess.Name()))
+	gw.log.Info("user online", zap.String("name", sess.Name()), zap.String("addr", conn.RemoteAddr().String()))
+	gw.broadcastSystem(fmt.Sprintf("%s 已上线", sess.Name()))
 
 	// 读循环：每轮刷新读超时，心跳会不断重置它；超时即判定断线。
 	for {
@@ -59,26 +59,26 @@ func (srv *Server) handle(conn net.Conn) {
 			}
 			break
 		}
-		srv.route(sess, m)
+		gw.route(sess, m)
 	}
 }
 
 // route 按消息类型分发处理。
-func (srv *Server) route(s *Session, m protocol.Message) {
+func (gw *Gateway) route(s *Session, m protocol.Message) {
 	switch m.Type {
 	case protocol.TypeChat:
 		if m.Content == "" {
 			s.send(protocol.Message{Type: protocol.TypeError, Error: "消息内容不能为空"})
 			return
 		}
-		srv.broadcast(s.Name(), m.Content)
+		gw.broadcast(s.Name(), m.Content)
 
 	case protocol.TypePrivate:
 		if m.To == "" || m.Content == "" {
 			s.send(protocol.Message{Type: protocol.TypeError, Error: "私聊需要指定对象和内容"})
 			return
 		}
-		if !srv.private(s.Name(), m.To, m.Content) {
+		if !gw.private(s.Name(), m.To, m.Content) {
 			s.send(protocol.Message{Type: protocol.TypeError, Error: "用户 " + m.To + " 不存在或不在线"})
 		}
 
@@ -89,20 +89,20 @@ func (srv *Server) route(s *Session, m protocol.Message) {
 			return
 		}
 		old := s.Name()
-		if err := srv.rename(s, newName); err != nil {
+		if err := gw.rename(s, newName); err != nil {
 			s.send(protocol.Message{Type: protocol.TypeError, Error: err.Error()})
 			return
 		}
 		s.send(protocol.Message{Type: protocol.TypeSystem, Content: "已更新昵称为 " + newName, TS: time.Now().Unix()})
-		srv.broadcastSystem(fmt.Sprintf("%s 改名为 %s", old, newName))
+		gw.broadcastSystem(fmt.Sprintf("%s 改名为 %s", old, newName))
 
 	case protocol.TypeWho:
-		s.send(protocol.Message{Type: protocol.TypeWhoList, Users: srv.who(), TS: time.Now().Unix()})
+		s.send(protocol.Message{Type: protocol.TypeWhoList, Users: gw.who(), TS: time.Now().Unix()})
 
 	case protocol.TypeHistory:
-		msgs, err := srv.store.ListMessages(m.Limit)
+		msgs, err := gw.store.ListMessages(m.Limit)
 		if err != nil {
-			srv.log.Error("list messages failed", zap.Error(err))
+			gw.log.Error("list messages failed", zap.Error(err))
 			s.send(protocol.Message{Type: protocol.TypeError, Error: "查询历史失败"})
 			return
 		}

@@ -1,4 +1,4 @@
-package server
+package gateway
 
 import (
 	"fmt"
@@ -19,8 +19,8 @@ import (
 
 // ---- 测试用的内存 store ----
 
-// fakeStore 是内存版 store.Store，用于 server 测试。
-// 为什么不用真实 SQLite：server 层要测的是并发/路由/鉴权逻辑，不关心底层数据库；
+// fakeStore 是内存版 store.Store，用于 gateway 测试。
+// 为什么不用真实 SQLite：gateway 层要测的是并发/路由/鉴权逻辑，不关心底层数据库；
 // 内存版隔离掉 SQLite 依赖，且可以预置用户、断言落盘消息，让测试更快更可控。
 type fakeStore struct {
 	mu    sync.Mutex
@@ -74,10 +74,10 @@ func (f *fakeStore) Close() error { return nil }
 
 // startClient 用 net.Pipe 建立一对内存连接：服务端跑 handle，返回客户端连接。
 // net.Pipe 是纯内存、同步的（Write 阻塞到对端 Read），适合做无真实端口的端到端测试。
-func startClient(t *testing.T, srv *Server) net.Conn {
+func startClient(t *testing.T, gw *Gateway) net.Conn {
 	t.Helper()
 	serverConn, clientConn := net.Pipe()
-	go srv.handle(serverConn)
+	go gw.handle(serverConn)
 	t.Cleanup(func() { _ = clientConn.Close() })
 	return clientConn
 }
@@ -150,8 +150,8 @@ func seedUser(t *testing.T, st store.Store, name, password string) {
 
 // TestHandleRegisterAndJoin 验证端到端：新用户 auth 注册 → 加入在线表 → 广播上线（FR-5）。
 func TestHandleRegisterAndJoin(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
-	conn := startClient(t, srv)
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	conn := startClient(t, gw)
 
 	// 客户端发 auth 帧（新用户，触发注册）
 	writeFrame(t, conn, protocol.Message{Type: protocol.TypeAuth, Name: "alice", Password: "secret"})
@@ -165,7 +165,7 @@ func TestHandleRegisterAndJoin(t *testing.T) {
 	if first.Token == "" {
 		t.Fatalf("注册成功应返回 JWT token，实际为空")
 	}
-	if name, err := srv.auth.Verify(first.Token); err != nil || name != "alice" {
+	if name, err := gw.auth.Verify(first.Token); err != nil || name != "alice" {
 		t.Fatalf("token 校验 = %q, %v; want (alice, nil)", name, err)
 	}
 
@@ -176,8 +176,8 @@ func TestHandleRegisterAndJoin(t *testing.T) {
 	}
 
 	// 在线表应包含 alice
-	if !contains(srv.who(), "alice") {
-		t.Fatalf("在线表 = %v，期望包含 alice", srv.who())
+	if !contains(gw.who(), "alice") {
+		t.Fatalf("在线表 = %v，期望包含 alice", gw.who())
 	}
 }
 
@@ -185,9 +185,9 @@ func TestHandleRegisterAndJoin(t *testing.T) {
 func TestHandleLoginExistingUser(t *testing.T) {
 	st := newFakeStore()
 	seedUser(t, st, "alice", "secret")
-	srv := NewServer(":0", zap.NewNop(), st, presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), st, presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 
-	conn := startClient(t, srv)
+	conn := startClient(t, gw)
 	writeFrame(t, conn, protocol.Message{Type: protocol.TypeAuth, Name: "alice", Password: "secret"})
 
 	first := readFrame(t, conn)
@@ -198,15 +198,15 @@ func TestHandleLoginExistingUser(t *testing.T) {
 	if first.Token == "" {
 		t.Fatalf("登录成功应返回 JWT token，实际为空")
 	}
-	if name, err := srv.auth.Verify(first.Token); err != nil || name != "alice" {
+	if name, err := gw.auth.Verify(first.Token); err != nil || name != "alice" {
 		t.Fatalf("token 校验 = %q, %v; want (alice, nil)", name, err)
 	}
 	second := readFrame(t, conn)
 	if second.Type != protocol.TypeSystem || second.Content != "alice 已上线" {
 		t.Fatalf("第二条响应 = %+v，期望「已上线」system", second)
 	}
-	if !contains(srv.who(), "alice") {
-		t.Fatalf("在线表 = %v，期望包含 alice", srv.who())
+	if !contains(gw.who(), "alice") {
+		t.Fatalf("在线表 = %v，期望包含 alice", gw.who())
 	}
 }
 
@@ -214,28 +214,28 @@ func TestHandleLoginExistingUser(t *testing.T) {
 func TestHandleLoginWrongPassword(t *testing.T) {
 	st := newFakeStore()
 	seedUser(t, st, "alice", "secret")
-	srv := NewServer(":0", zap.NewNop(), st, presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), st, presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 
-	conn := startClient(t, srv)
+	conn := startClient(t, gw)
 	writeFrame(t, conn, protocol.Message{Type: protocol.TypeAuth, Name: "alice", Password: "wrong"})
 
 	resp := readFrame(t, conn)
 	if resp.Type != protocol.TypeError || resp.Error != "密码错误" {
 		t.Fatalf("响应 = %+v，期望「密码错误」error", resp)
 	}
-	if len(srv.who()) != 0 {
-		t.Fatalf("在线表 = %v，期望为空", srv.who())
+	if len(gw.who()) != 0 {
+		t.Fatalf("在线表 = %v，期望为空", gw.who())
 	}
 }
 
 // TestHandleAuthTokenReconnect 验证免密重连：凭有效 JWT 上线，不查 store、不校验密码，
 // 身份以 token 的 sub 为准，成功后 re-issue 新 token（滑动过期）。
 func TestHandleAuthTokenReconnect(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
-	conn := startClient(t, srv)
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	conn := startClient(t, gw)
 
 	// 直接用 Manager 签发一个 alice 的 token，模拟此前登录拿到的凭据。
-	token, err := srv.auth.Issue("alice")
+	token, err := gw.auth.Issue("alice")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestHandleAuthTokenReconnect(t *testing.T) {
 	if first.Token == "" {
 		t.Fatalf("重连成功应 re-issue 新 token，实际为空")
 	}
-	if name, err := srv.auth.Verify(first.Token); err != nil || name != "alice" {
+	if name, err := gw.auth.Verify(first.Token); err != nil || name != "alice" {
 		t.Fatalf("新 token 校验 = %q, %v; want (alice, nil)", name, err)
 	}
 
@@ -257,17 +257,17 @@ func TestHandleAuthTokenReconnect(t *testing.T) {
 	if second.Type != protocol.TypeSystem || second.Content != "alice 已上线" {
 		t.Fatalf("第二条响应 = %+v，期望「已上线」system", second)
 	}
-	if !contains(srv.who(), "alice") {
-		t.Fatalf("在线表 = %v，期望包含 alice", srv.who())
+	if !contains(gw.who(), "alice") {
+		t.Fatalf("在线表 = %v，期望包含 alice", gw.who())
 	}
 }
 
 // TestHandleAuthTokenRejectsInvalid 验证非法/过期 token 被拒绝，不进入上线流程。
 func TestHandleAuthTokenRejectsInvalid(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 
 	// 非法 token：签名/结构对不上。
-	conn := startClient(t, srv)
+	conn := startClient(t, gw)
 	writeFrame(t, conn, protocol.Message{Type: protocol.TypeAuthToken, Token: "garbage"})
 	resp := readFrame(t, conn)
 	if resp.Type != protocol.TypeError || resp.Error != "token 无效，请重新登录" {
@@ -279,21 +279,21 @@ func TestHandleAuthTokenRejectsInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	conn2 := startClient(t, srv)
+	conn2 := startClient(t, gw)
 	writeFrame(t, conn2, protocol.Message{Type: protocol.TypeAuthToken, Token: expired})
 	resp2 := readFrame(t, conn2)
 	if resp2.Type != protocol.TypeError || resp2.Error != "token 已过期，请重新登录" {
 		t.Fatalf("过期 token 响应 = %+v，期望「token 已过期」error", resp2)
 	}
-	if len(srv.who()) != 0 {
-		t.Fatalf("在线表 = %v，期望为空（拒绝后不应上线）", srv.who())
+	if len(gw.who()) != 0 {
+		t.Fatalf("在线表 = %v，期望为空（拒绝后不应上线）", gw.who())
 	}
 }
 
 // TestRouteRejectsBadInput 验证：非法输入返回 error 消息而非 panic（对应 P1-1 的修复）。
 func TestRouteRejectsBadInput(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
-	s := &Session{server: srv, sendCh: make(chan protocol.Message, 64)}
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	s := &Session{gateway: gw, sendCh: make(chan protocol.Message, 64)}
 
 	cases := []struct {
 		name string
@@ -308,7 +308,7 @@ func TestRouteRejectsBadInput(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv.route(s, tc.in)
+			gw.route(s, tc.in)
 			resp := recv(t, s.sendCh)
 			if resp.Type != protocol.TypeError || resp.Error != tc.want {
 				t.Fatalf("响应 = %+v，期望 error %q", resp, tc.want)
@@ -367,12 +367,12 @@ func login(t *testing.T, conn net.Conn, name, password string) {
 
 // TestPrivateMessage 验证端到端私聊：alice 私聊 bob，bob 收到（FR-2）。
 func TestPrivateMessage(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 
-	connA := startClient(t, srv)
+	connA := startClient(t, gw)
 	login(t, connA, "alice", "secret")
 
-	connB := startClient(t, srv)
+	connB := startClient(t, gw)
 	login(t, connB, "bob", "secret")
 
 	// alice 会收到 "bob 已上线" 广播，先读掉
@@ -393,12 +393,12 @@ func TestPrivateMessage(t *testing.T) {
 
 // TestRename 验证改名成功与重名冲突（FR-3）。
 func TestRename(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 
-	connA := startClient(t, srv)
+	connA := startClient(t, gw)
 	login(t, connA, "alice", "secret")
 
-	connB := startClient(t, srv)
+	connB := startClient(t, gw)
 	login(t, connB, "bob", "secret")
 
 	// 读掉 alice 收到的 bob 上线广播
@@ -417,8 +417,8 @@ func TestRename(t *testing.T) {
 	}
 
 	// 在线表：carol 在，alice 已移除
-	if !contains(srv.who(), "carol") || contains(srv.who(), "alice") {
-		t.Fatalf("在线表 = %v，期望 carol 在、alice 不在", srv.who())
+	if !contains(gw.who(), "carol") || contains(gw.who(), "alice") {
+		t.Fatalf("在线表 = %v，期望 carol 在、alice 不在", gw.who())
 	}
 
 	// 重名冲突：carol 改名为已在线的 bob
@@ -451,8 +451,8 @@ func (p *panicStore) SaveMessage(m store.Message) error {
 // 异步持久化后 SaveMessage 在 saveLoop goroutine 里执行（不再走 handle），
 // 进程级 goroutine 的 panic 若未恢复会崩掉整个进程，所以 saveOne 必须有 recover。
 func TestHandleRecoverFromPanic(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), &panicStore{fakeStore: newFakeStore()}, presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
-	conn := startClient(t, srv)
+	gw := NewGateway(":0", zap.NewNop(), &panicStore{fakeStore: newFakeStore()}, presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	conn := startClient(t, gw)
 	login(t, conn, "alice", "secret")
 
 	// 发公聊触发 panic：broadcast 投递到 saveCh，saveLoop 消费时 SaveMessage panic（见 panicStore）。
@@ -461,10 +461,10 @@ func TestHandleRecoverFromPanic(t *testing.T) {
 	writeFrame(t, conn, protocol.Message{Type: protocol.TypeChat, Content: "boom"})
 
 	// 验证服务器仍能服务新连接：落盘 panic 是单条消息级，不应影响进程级状态。
-	conn2 := startClient(t, srv)
+	conn2 := startClient(t, gw)
 	login(t, conn2, "bob", "secret")
-	if !contains(srv.who(), "bob") {
-		t.Fatalf("panic 后在线表 = %v，期望 bob 能正常上线", srv.who())
+	if !contains(gw.who(), "bob") {
+		t.Fatalf("panic 后在线表 = %v，期望 bob 能正常上线", gw.who())
 	}
 }
 
@@ -472,15 +472,15 @@ func TestHandleRecoverFromPanic(t *testing.T) {
 // 慢客户端的 writeLoop 阻塞在写（net.Pipe 对端不读），sendCh 被填满；
 // broadcast 的 send 是非阻塞投递，满了 dropped 计数，快客户端仍正常收到全部广播。
 func TestSlowClientDoesNotBlockBroadcast(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 
 	// 慢客户端：登录后不再读，让它的 writeLoop 阻塞、sendCh 填满。
-	slowConn := startClient(t, srv)
+	slowConn := startClient(t, gw)
 	login(t, slowConn, "slow", "secret")
 
 	// 快客户端：正常读。上线时 slow 也会收到 "fast 已上线"，但 slow 不读，
 	// 它的 writeLoop 因此阻塞在写这一条上（模拟慢消费者）。
-	fastConn := startClient(t, srv)
+	fastConn := startClient(t, gw)
 	login(t, fastConn, "fast", "secret")
 
 	// fast 连发 100 条公聊，每条都要能立即收到自己的广播回显（不被 slow 拖慢）。
@@ -495,7 +495,7 @@ func TestSlowClientDoesNotBlockBroadcast(t *testing.T) {
 	}
 
 	// 慢客户端 sendCh(64) 被填满，多余消息被 dropped 计数——背压生效，且广播未被拖慢。
-	if dropped := srv.dropped.Load(); dropped == 0 {
+	if dropped := gw.dropped.Load(); dropped == 0 {
 		t.Fatalf("期望慢客户端的消息被 dropped 计数，实际 0")
 	}
 }
@@ -503,12 +503,12 @@ func TestSlowClientDoesNotBlockBroadcast(t *testing.T) {
 // TestSendSystemSeparateChannel 验证系统消息走独立通道、满则静默丢弃，
 // 不挤占业务消息的 sendCh（P2-3 的核心机制）。
 func TestSendSystemSeparateChannel(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw := NewGateway(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 
 	// net.Pipe：对端不读，writeLoop 会阻塞在写第一条系统消息上（同步内存连接）。
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
-	s := newSession(serverConn, srv)
+	s := newSession(serverConn, gw)
 	defer s.close()
 
 	// 灌大量系统消息，远超 sysCh 缓冲(8)。满则静默丢，不计数。
@@ -525,7 +525,7 @@ func TestSendSystemSeparateChannel(t *testing.T) {
 		t.Fatalf("sysCh 长度 = 0，期望系统消息进入独立通道")
 	}
 	// 系统消息满则静默丢，不进 dropped 计数（那是慢客户端丢业务消息的信号）。
-	if got := srv.dropped.Load(); got != 0 {
+	if got := gw.dropped.Load(); got != 0 {
 		t.Fatalf("dropped = %d，期望 0（系统消息满则静默丢，不计数）", got)
 	}
 }

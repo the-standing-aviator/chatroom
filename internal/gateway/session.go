@@ -1,4 +1,4 @@
-package server
+package gateway
 
 import (
 	"net"
@@ -16,8 +16,8 @@ const (
 
 // Session 表示一个已连接的客户端会话（含鉴权后的在线状态）。
 type Session struct {
-	conn   net.Conn
-	server *Server
+	conn    net.Conn
+	gateway *Gateway
 
 	nameMu sync.RWMutex
 	name   string // 当前昵称，用 nameMu 保护（修复 P1-3 数据竞态）
@@ -28,12 +28,12 @@ type Session struct {
 }
 
 // newSession 创建一个会话并启动写协程。
-func newSession(conn net.Conn, srv *Server) *Session {
+func newSession(conn net.Conn, gw *Gateway) *Session {
 	s := &Session{
-		conn:   conn,
-		server: srv,
-		sendCh: make(chan protocol.Message, sendBuffer),
-		sysCh:  make(chan protocol.Message, sysBuffer),
+		conn:    conn,
+		gateway: gw,
+		sendCh:  make(chan protocol.Message, sendBuffer),
+		sysCh:   make(chan protocol.Message, sysBuffer),
 	}
 	go s.writeLoop()
 	return s
@@ -57,12 +57,12 @@ func (s *Session) setName(name string) {
 func (s *Session) send(m protocol.Message) {
 	// recover 兜底：会话关闭后 sendCh 已 close，若仍有并发 send 会 panic
 	// （写失败触发 close 的极小竞态窗口）。正常流程下 close 与 broadcast 的 send
-	// 由 srv.mu 保证互斥，不会走到这里；此处只是防御，避免极端情况崩进程。
+	// 由 gw.mu 保证互斥，不会走到这里；此处只是防御，避免极端情况崩进程。
 	defer func() { _ = recover() }()
 	select {
 	case s.sendCh <- m:
 	default:
-		s.server.dropped.Add(1)
+		s.gateway.dropped.Add(1)
 	}
 }
 
@@ -140,8 +140,8 @@ func (s *Session) close() {
 	s.once.Do(func() {
 		// 已鉴权（有昵称）才广播下线并移出在线表。
 		if name := s.Name(); name != "" {
-			s.server.removeSession(s)
-			s.server.broadcastSystem(name + " 已下线")
+			s.gateway.removeSession(s)
+			s.gateway.broadcastSystem(name + " 已下线")
 		}
 		close(s.sendCh)
 		close(s.sysCh)
