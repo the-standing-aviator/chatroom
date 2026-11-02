@@ -24,6 +24,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8888", "监听地址")
+	node := flag.String("node", "", "节点身份 ID（默认取 -addr 值；多节点部署时须全局唯一）")
 	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径（-store sqlite 时使用）")
 	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
 	dsn := flag.String("dsn", "postgres://chat:chat@localhost:5432/chat?sslmode=disable", "PostgreSQL DSN（-store postgres 时使用）")
@@ -62,7 +63,13 @@ func main() {
 	}
 	defer b.Close()
 
-	gw := gateway.NewGateway(*addr, logger, st, p, am, b)
+	// 节点身份默认回落监听地址：单机/单进程无需指定；多节点部署时每个节点 -node 唯一。
+	nodeID := *node
+	if nodeID == "" {
+		nodeID = *addr
+	}
+
+	gw := gateway.NewGateway(nodeID, *addr, logger, st, p, am, b)
 
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。
@@ -71,7 +78,7 @@ func main() {
 	go func() {
 		logger.Info("metrics server started", zap.String("addr", *metricsAddr))
 		if err := http.ListenAndServe(*metricsAddr, nil); err != nil { // nil → DefaultServeMux
-			logger.Error("metrics gateway failed", zap.Error(err))
+			logger.Error("metrics server failed", zap.Error(err))
 		}
 	}()
 

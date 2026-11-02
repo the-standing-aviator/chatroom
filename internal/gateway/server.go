@@ -26,16 +26,17 @@ const (
 
 // 总线主题：跨节点的消息路由约定。
 // - subjectBroadcast / subjectSystem：所有节点都订阅，广播时扇出到各节点本地会话。
-// - subjectNode + <addr>：定向投递，每个节点只订阅自己的那个主题，私聊据此送到目标节点。
+// - subjectNode + <node>：定向投递，每个节点只订阅自己的那个主题，私聊据此送到目标节点。
 const (
 	subjectBroadcast = "chat.broadcast" // 公聊广播
 	subjectSystem    = "chat.system"    // 系统广播（上线/下线/改名）
-	subjectNode      = "chat.node."     // 定向投递前缀，后接节点地址
+	subjectNode      = "chat.node."     // 定向投递前缀，后接节点 ID
 )
 
 // Gateway 聊天接入节点：维护在线会话表，负责广播、私聊与消息路由。
 type Gateway struct {
-	addr  string
+	node  string // 本节点身份 ID：presence 登记 / bus 定向主题用它，与监听地址解耦
+	addr  string // 监听地址：仅 net.Listen 用
 	log   *zap.Logger
 	store store.Store
 
@@ -53,13 +54,15 @@ type Gateway struct {
 	handleWG sync.WaitGroup // 跟踪 handle goroutine，Shutdown 时等其退出
 }
 
-// NewGateway 创建一个接入节点实例。log 可为 nil（内部用 zap.NewNop 兜底）。
+// NewGateway 创建一个接入节点实例。node 是本节点身份 ID（跨节点唯一，供 presence 登记与
+// bus 定向投递用），addr 是监听地址。log 可为 nil（内部用 zap.NewNop 兜底）。
 // p 是在线登记表实现（内存/Redis），am 是 JWT 签发/校验器，b 是消息总线（内存/NATS）——ports & adapters。
-func NewGateway(addr string, log *zap.Logger, st store.Store, p presence.Presence, am *auth.Manager, b bus.Bus) *Gateway {
+func NewGateway(node, addr string, log *zap.Logger, st store.Store, p presence.Presence, am *auth.Manager, b bus.Bus) *Gateway {
 	if log == nil {
 		log = zap.NewNop()
 	}
 	gw := &Gateway{
+		node:     node,
 		addr:     addr,
 		log:      log,
 		store:    st,
@@ -99,7 +102,7 @@ func (gw *Gateway) subscribeBus() {
 		gw.log.Error("subscribe system failed", zap.Error(err))
 	}
 	// 定向投递：只投递给目标昵称对应的本地会话（私聊）。
-	if _, err := gw.bus.Subscribe(subjectNode+gw.addr, func(m protocol.Message) {
+	if _, err := gw.bus.Subscribe(subjectNode+gw.node, func(m protocol.Message) {
 		gw.mu.RLock()
 		if s := gw.sessions[m.To]; s != nil {
 			s.send(m)
@@ -249,7 +252,7 @@ func (gw *Gateway) who() []string {
 // addSession 把会话登记进在线状态。用 presence.Join 做「全局唯一」判断：
 // 已在线（ErrConflict）或登记失败时返回错误；成功后把会话放进本地投递表供本节点投递。
 func (gw *Gateway) addSession(s *Session) error {
-	if err := gw.presence.Join(s.Name(), gw.addr); err != nil {
+	if err := gw.presence.Join(s.Name(), gw.node); err != nil {
 		return err
 	}
 	gw.mu.Lock()
