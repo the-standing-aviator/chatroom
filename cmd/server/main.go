@@ -32,6 +32,8 @@ func main() {
 	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis 地址（-presence redis 时使用）")
 	jwtSecret := flag.String("jwt-secret", "dev-secret-change-me", "JWT 签名密钥（生产务必覆盖）")
 	jwtTTL := flag.Duration("jwt-ttl", 24*time.Hour, "JWT 有效期")
+	busType := flag.String("bus", "memory", "消息总线后端：memory | nats")
+	natsURL := flag.String("nats-url", "nats://localhost:4222", "NATS 地址（-bus nats 时使用）")
 	flag.Parse()
 
 	logger, err := zap.NewProduction()
@@ -54,8 +56,11 @@ func main() {
 
 	am := auth.New(*jwtSecret, *jwtTTL)
 
-	// 消息总线：V3.3 先用内存实现（进程内直发），NATS 实现在后续步骤接入。
-	b := bus.NewMemory()
+	b, err := openBus(*busType, *natsURL)
+	if err != nil {
+		logger.Fatal("open bus failed", zap.Error(err))
+	}
+	defer b.Close()
 
 	srv := server.NewServer(*addr, logger, st, p, am, b)
 
@@ -112,5 +117,18 @@ func openPresence(kind, addr string) (presence.Presence, error) {
 		return presence.NewRedis(addr), nil
 	default:
 		return nil, fmt.Errorf("unknown presence type %q (want memory | redis)", kind)
+	}
+}
+
+// openBus 按 -bus 选择消息总线后端，返回 Bus 接口实现。
+// 服务端只依赖接口，不关心底层是内存直发还是 NATS 跨节点投递（ports & adapters）。
+func openBus(kind, url string) (bus.Bus, error) {
+	switch kind {
+	case "memory":
+		return bus.NewMemory(), nil
+	case "nats":
+		return bus.NewNATS(url)
+	default:
+		return nil, fmt.Errorf("unknown bus type %q (want memory | nats)", kind)
 	}
 }
