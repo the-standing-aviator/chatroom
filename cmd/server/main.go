@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"communicate/internal/auth"
+	"communicate/internal/bus"
 	"communicate/internal/presence"
 	"communicate/internal/server"
 	"communicate/internal/store"
@@ -53,7 +54,10 @@ func main() {
 
 	am := auth.New(*jwtSecret, *jwtTTL)
 
-	srv := server.NewServer(*addr, logger, st, p, am)
+	// 消息总线：V3.3 先用内存实现（进程内直发），NATS 实现在后续步骤接入。
+	b := bus.NewMemory()
+
+	srv := server.NewServer(*addr, logger, st, p, am, b)
 
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。

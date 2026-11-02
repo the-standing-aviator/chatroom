@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"communicate/internal/auth"
+	"communicate/internal/bus"
 	"communicate/internal/presence"
 	"communicate/internal/protocol"
 	"communicate/internal/store"
@@ -21,6 +22,15 @@ import (
 const (
 	readTimeout = 30 * time.Second // 读超时：超过该时长无任何数据则判定断线
 	authTimeout = 10 * time.Second // 鉴权阶段超时
+)
+
+// 总线主题：跨节点的消息路由约定。
+// - subjectBroadcast / subjectSystem：所有节点都订阅，广播时扇出到各节点本地会话。
+// - subjectNode + <addr>：定向投递，每个节点只订阅自己的那个主题，私聊据此送到目标节点。
+const (
+	subjectBroadcast = "chat.broadcast" // 公聊广播
+	subjectSystem    = "chat.system"    // 系统广播（上线/下线/改名）
+	subjectNode      = "chat.node."     // 定向投递前缀，后接节点地址
 )
 
 // Server 聊天服务器：维护在线会话表，负责广播、私聊与消息路由。
@@ -33,30 +43,70 @@ type Server struct {
 	sessions map[string]*Session // 本地投递表：昵称 → 本节点持有的会话
 	presence presence.Presence   // 在线登记表：昵称 → 节点，可外置（内存/Redis）
 	auth     *auth.Manager       // JWT 签发/校验（无状态 token）
+	bus      bus.Bus             // 消息总线：广播扇出 / 私聊定向，可外置（内存/NATS）
 
 	saveCh   chan store.Message // 持久化队列：广播先入队，saveLoop 后台落盘
 	saveDone chan struct{}      // saveLoop 退出信号，优雅关闭时靠它等 flush 完成
 	dropped  atomic.Int64       // 因发送队列满被丢弃的消息计数
 
-	ln       net.Listener    // 监听器，Shutdown 时 Close 以停止接收新连接
-	handleWG sync.WaitGroup  // 跟踪 handle goroutine，Shutdown 时等其退出
+	ln       net.Listener   // 监听器，Shutdown 时 Close 以停止接收新连接
+	handleWG sync.WaitGroup // 跟踪 handle goroutine，Shutdown 时等其退出
 }
 
 // NewServer 创建一个服务器实例。log 可为 nil（内部用 zap.NewNop 兜底）。
-// p 是在线登记表实现（内存/Redis），am 是 JWT 签发/校验器（ports & adapters）。
-func NewServer(addr string, log *zap.Logger, st store.Store, p presence.Presence, am *auth.Manager) *Server {
+// p 是在线登记表实现（内存/Redis），am 是 JWT 签发/校验器，b 是消息总线（内存/NATS）——ports & adapters。
+func NewServer(addr string, log *zap.Logger, st store.Store, p presence.Presence, am *auth.Manager, b bus.Bus) *Server {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &Server{
+	srv := &Server{
 		addr:     addr,
 		log:      log,
 		store:    st,
 		presence: p,
 		auth:     am,
+		bus:      b,
 		sessions: make(map[string]*Session),
 		saveCh:   make(chan store.Message, 1024),
 		saveDone: make(chan struct{}),
+	}
+	srv.subscribeBus()
+	return srv
+}
+
+// subscribeBus 注册本节点的总线订阅：广播/系统消息扇出到本地会话，定向消息投递给指定本地会话。
+// 单机用内存 bus 时，Publish 同步回调这些 handler，等价于原来的直接遍历 sessions；
+// 分布式换 NATS 后，回调由 NATS 在后台协程触发，这段代码保持不变（ports & adapters 的关键收益）。
+func (srv *Server) subscribeBus() {
+	// 公聊广播：投递给所有本地会话。
+	if _, err := srv.bus.Subscribe(subjectBroadcast, func(m protocol.Message) {
+		srv.mu.RLock()
+		for _, s := range srv.sessions {
+			s.send(m)
+		}
+		srv.mu.RUnlock()
+	}); err != nil {
+		srv.log.Error("subscribe broadcast failed", zap.Error(err))
+	}
+	// 系统广播：投递给所有本地会话（走 sendSystem 独立通道，尽力而为）。
+	if _, err := srv.bus.Subscribe(subjectSystem, func(m protocol.Message) {
+		srv.mu.RLock()
+		for _, s := range srv.sessions {
+			s.sendSystem(m)
+		}
+		srv.mu.RUnlock()
+	}); err != nil {
+		srv.log.Error("subscribe system failed", zap.Error(err))
+	}
+	// 定向投递：只投递给目标昵称对应的本地会话（私聊）。
+	if _, err := srv.bus.Subscribe(subjectNode+srv.addr, func(m protocol.Message) {
+		srv.mu.RLock()
+		if s := srv.sessions[m.To]; s != nil {
+			s.send(m)
+		}
+		srv.mu.RUnlock()
+	}); err != nil {
+		srv.log.Error("subscribe node failed", zap.Error(err))
 	}
 }
 
@@ -122,46 +172,48 @@ func (srv *Server) enqueue(m store.Message) {
 }
 
 // broadcast 把一条公聊消息广播给所有在线用户，并异步持久化。
+// 投递走总线（subjectBroadcast）：subscribeBus 注册的 handler 扇出到本地会话。
+// 单机 = 内存 bus 同步回调，等价于原来直接遍历 sessions；分布式 = NATS 异步回调，代码不变。
 func (srv *Server) broadcast(from, content string) {
 	ts := time.Now().Unix()
 	m := protocol.Message{Type: protocol.TypeBroadcast, From: from, Content: content, TS: ts}
-
-	srv.mu.RLock()
-	for _, s := range srv.sessions {
-		s.send(m)
+	if err := srv.bus.Publish(subjectBroadcast, m); err != nil {
+		srv.log.Error("publish broadcast failed", zap.Error(err))
 	}
-	srv.mu.RUnlock()
-
 	// 异步持久化：只入队不落盘，广播延迟不再被磁盘 I/O 拖累。
 	srv.enqueue(store.Message{Type: "chat", From: from, Content: content, TS: time.Unix(ts, 0)})
 }
 
 // broadcastSystem 广播一条系统提示（上下线、改名等，不持久化）。
-// 走 sendSystem 独立通道：系统消息尽力而为，不挤占业务消息的 sendCh（见 P2-3）。
+// 走总线（subjectSystem），handler 用 sendSystem 独立通道投递：系统消息尽力而为，
+// 不挤占业务消息的 sendCh（见 P2-3）。
 func (srv *Server) broadcastSystem(content string) {
 	m := protocol.Message{Type: protocol.TypeSystem, Content: content, TS: time.Now().Unix()}
-	srv.mu.RLock()
-	for _, s := range srv.sessions {
-		s.sendSystem(m)
+	if err := srv.bus.Publish(subjectSystem, m); err != nil {
+		srv.log.Error("publish system failed", zap.Error(err))
 	}
-	srv.mu.RUnlock()
 }
 
-// private 向指定昵称的用户发送私聊。成功持久化并返回 true。
+// private 向指定昵称的用户发送私聊。先查在线登记表（presence）定位目标节点，
+// 再经总线定向投递到该节点（subjectNode+node），由目标节点的 handler 投递给本地会话。
+// 目标在线则持久化并返回 true；不在线或查询失败返回 false。
 func (srv *Server) private(from, to, content string) bool {
 	ts := time.Now().Unix()
 
-	srv.mu.RLock()
-	target, ok := srv.sessions[to]
-	if ok {
-		target.send(protocol.Message{Type: protocol.TypePrivate, From: from, Content: content, TS: ts})
+	node, err := srv.presence.Node(to)
+	if err != nil {
+		if !errors.Is(err, presence.ErrNotFound) {
+			srv.log.Error("presence node failed", zap.Error(err))
+		}
+		return false
 	}
-	srv.mu.RUnlock()
-
-	if ok {
-		srv.enqueue(store.Message{Type: "private", From: from, To: to, Content: content, TS: time.Unix(ts, 0)})
+	m := protocol.Message{Type: protocol.TypePrivate, From: from, To: to, Content: content, TS: ts}
+	if err := srv.bus.Publish(subjectNode+node, m); err != nil {
+		srv.log.Error("publish private failed", zap.Error(err))
+		return false
 	}
-	return ok
+	srv.enqueue(store.Message{Type: "private", From: from, To: to, Content: content, TS: time.Unix(ts, 0)})
+	return true
 }
 
 // rename 修改会话昵称。新昵称已被占用时返回 error。

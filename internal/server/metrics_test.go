@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"communicate/internal/auth"
+	"communicate/internal/bus"
 	"communicate/internal/presence"
 	"communicate/internal/protocol"
 )
@@ -43,7 +44,7 @@ func metricValue(t *testing.T, reg *prometheus.Registry, name string) float64 {
 
 // TestMetricsOnlineCount 验证指标从实时状态读取：登录后 chat_online 变 1，goroutines > 0。
 func TestMetricsOnlineCount(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour))
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 	reg := prometheus.NewRegistry()
 	RegisterMetrics(reg, srv)
 
@@ -67,7 +68,7 @@ func TestMetricsOnlineCount(t *testing.T) {
 
 // TestMetricsDroppedCounter 验证 dropped 计数被暴露为指标：慢会话 sendCh 填满后数值增加。
 func TestMetricsDroppedCounter(t *testing.T) {
-	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour))
+	srv := NewServer(":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
 	reg := prometheus.NewRegistry()
 	RegisterMetrics(reg, srv)
 
