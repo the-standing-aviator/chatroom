@@ -97,7 +97,7 @@ func (srv *Server) authenticateToken(s *Session, m protocol.Message) bool {
 }
 
 // issueToken 为已通过密码校验的用户签发 JWT。失败时记录日志并返回空串，
-// 不让 token 签发失败阻断登录（V3.3 之前 token 尚不参与鉴权校验）。
+// 不让 token 签发失败阻断登录（免密重连签不出 token 时仍可退回密码登录）。
 func (srv *Server) issueToken(name string) string {
 	token, err := srv.auth.Issue(name)
 	if err != nil {
