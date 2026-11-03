@@ -59,6 +59,13 @@ func (gw *Gateway) handle(c conn) {
 			}
 			break
 		}
+		// 消息限流：除心跳外，客户端所有消息过一遍令牌桶。超限则回 error 并丢弃，
+		// 而不是断连——刷屏是行为问题，警告即可；断连反而可能误伤偶尔手快的正常用户。
+		// 心跳必须豁免，否则慢速限流会把保活心跳拒掉，客户端被误判断线。
+		if m.Type != protocol.TypeHeartbeat && !sess.limiter.Allow() {
+			sess.send(protocol.Message{Type: protocol.TypeError, Error: "发送太频繁，请稍后再试"})
+			continue
+		}
 		gw.route(sess, m)
 	}
 }

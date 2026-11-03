@@ -473,6 +473,7 @@ func TestHandleRecoverFromPanic(t *testing.T) {
 // broadcast 的 send 是非阻塞投递，满了 dropped 计数，快客户端仍正常收到全部广播。
 func TestSlowClientDoesNotBlockBroadcast(t *testing.T) {
 	gw := NewGateway("test-node", ":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+	gw.SetMsgRateLimit(0, 0) // 本测试聚焦背压隔离，与限流无关：关闭限流，避免 100 连发被限流误拒
 
 	// 慢客户端：登录后不再读，让它的 writeLoop 阻塞、sendCh 填满。
 	slowConn := startClient(t, gw)

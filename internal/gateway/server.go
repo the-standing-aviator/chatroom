@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 
 	"communicate/internal/auth"
 	"communicate/internal/bus"
@@ -48,6 +49,9 @@ type Gateway struct {
 
 	allowedOrigins []string // WebSocket Origin 白名单：空 = 放行所有（开发）；生产设真实域名
 
+	msgRate  rate.Limit // 每会话消息限流速率（令牌/秒）；rate.Inf = 不限流
+	msgBurst int        // 令牌桶容量（允许的短突发）
+
 	saveCh   chan store.Message // 持久化队列：广播先入队，saveLoop 后台落盘
 	saveDone chan struct{}      // saveLoop 退出信号，优雅关闭时靠它等 flush 完成
 	dropped  atomic.Int64       // 因发送队列满被丢弃的消息计数
@@ -74,9 +78,24 @@ func NewGateway(node, addr string, log *zap.Logger, st store.Store, p presence.P
 		sessions: make(map[string]*Session),
 		saveCh:   make(chan store.Message, 1024),
 		saveDone: make(chan struct{}),
+		msgRate:  rate.Limit(5), // 默认每会话 5 条/秒，突发 10——对正常用户宽松
+		msgBurst: 10,
 	}
 	gw.subscribeBus()
 	return gw
+}
+
+// SetMsgRateLimit 设置每会话消息限流：每秒 ratePerSec 条、突发 burst 条。
+// 必须在启动服务前调用（之后只在会话创建时读取，无并发写）；ratePerSec <= 0 表示不限流。
+// 这是公网上线前的安全底线：广播是「1 进 N 出」的放大，必须在源头（每个会话）掐住，
+// 否则一个客户端刷屏就能打爆所有在线者的发送队列。
+func (gw *Gateway) SetMsgRateLimit(ratePerSec float64, burst int) {
+	if ratePerSec <= 0 {
+		gw.msgRate = rate.Inf // 不限流
+	} else {
+		gw.msgRate = rate.Limit(ratePerSec)
+	}
+	gw.msgBurst = burst
 }
 
 // subscribeBus 注册本节点的总线订阅：广播/系统消息扇出到本地会话，定向消息投递给指定本地会话。

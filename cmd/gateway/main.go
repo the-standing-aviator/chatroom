@@ -28,6 +28,8 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8888", "监听地址")
 	wsAddr := flag.String("ws-addr", "127.0.0.1:8890", "WebSocket 监听地址（浏览器前端接入）")
 	allowedOrigins := flag.String("allowed-origins", "", "WebSocket 允许的 Origin 白名单（逗号分隔）；空 = 放行所有（开发）")
+	msgRate := flag.Float64("msg-rate", 5, "每客户端每秒允许的消息数（0 = 不限流）")
+	msgBurst := flag.Int("msg-burst", 10, "每客户端消息令牌桶容量（允许的短突发）")
 	node := flag.String("node", "", "节点身份 ID（默认取 -addr 值；多节点部署时须全局唯一）")
 	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径（-store sqlite 时使用）")
 	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
@@ -86,6 +88,9 @@ func main() {
 		}
 		gw.SetAllowedOrigins(origins)
 	}
+
+	// 消息限流：每会话令牌桶，挡「广播 1 进 N 出」的放大式刷屏；0 = 不限流。
+	gw.SetMsgRateLimit(*msgRate, *msgBurst)
 
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。

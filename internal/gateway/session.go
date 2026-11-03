@@ -4,6 +4,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"communicate/internal/protocol"
 )
 
@@ -21,9 +23,10 @@ type Session struct {
 	nameMu sync.RWMutex
 	name   string // 当前昵称，用 nameMu 保护（修复 P1-3 数据竞态）
 
-	sendCh chan protocol.Message // 业务消息队列（chat/私聊/错误提示等，带缓冲）
-	sysCh  chan protocol.Message // 系统消息队列（上下线/改名，尽力而为，满则丢）
-	once   sync.Once
+	limiter *rate.Limiter         // 客户端消息限流器（令牌桶）：防单个客户端刷屏放大
+	sendCh  chan protocol.Message // 业务消息队列（chat/私聊/错误提示等，带缓冲）
+	sysCh   chan protocol.Message // 系统消息队列（上下线/改名，尽力而为，满则丢）
+	once    sync.Once
 }
 
 // newSession 创建一个会话并启动写协程。
@@ -31,6 +34,7 @@ func newSession(c conn, gw *Gateway) *Session {
 	s := &Session{
 		conn:    c,
 		gateway: gw,
+		limiter: rate.NewLimiter(gw.msgRate, gw.msgBurst),
 		sendCh:  make(chan protocol.Message, sendBuffer),
 		sysCh:   make(chan protocol.Message, sysBuffer),
 	}
