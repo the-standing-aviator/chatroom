@@ -40,20 +40,45 @@ func (c *wsConn) RemoteAddr() string {
 	return c.Conn.RemoteAddr().String()
 }
 
-// wsUpgrader 把 HTTP 连接升级为 WebSocket。ReadBufferSize/WriteBufferSize 与 TCP 分帧
-// 缓冲量级一致即可；CheckOrigin 先放行所有来源（本地开发/联调需要），
-// 上线公网前必须收紧到实际站点域名，否则别的网站能用你的服务做跨站 WebSocket。
-var wsUpgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+// newUpgrader 构造一个 WebSocket 升级器。ReadBufferSize/WriteBufferSize 与 TCP 分帧
+// 缓冲量级一致即可；CheckOrigin 按白名单收紧——这是上线公网前的安全必做项，
+// 否则任何网站都能用你的服务做跨站 WebSocket（CSRF 向量）。
+func newUpgrader(allowedOrigins []string) *websocket.Upgrader {
+	return &websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			// 未配置白名单：开发/本地联调，放行所有来源。
+			if len(allowedOrigins) == 0 {
+				return true
+			}
+			origin := r.Header.Get("Origin")
+			// 无 Origin 头：非浏览器客户端（Go 客户端 / curl 等）。它们不携带浏览器
+			// 的跨站凭据，无 CSRF 风险，放行。
+			if origin == "" {
+				return true
+			}
+			for _, allowed := range allowedOrigins {
+				if origin == allowed {
+					return true
+				}
+			}
+			return false
+		},
+	}
+}
+
+// SetAllowedOrigins 设置 WebSocket Origin 白名单（origin 字符串列表）。
+// 必须在启动 HTTP 服务前调用（之后只读，无并发写）；空列表 = 放行所有来源（开发）。
+func (gw *Gateway) SetAllowedOrigins(origins []string) {
+	gw.allowedOrigins = origins
 }
 
 // HandleWebSocket 处理 /ws 的升级请求：升级成功后把连接交给 handle，与 TCP 走同一套
 // 会话管理 / 鉴权 / 路由逻辑（这是 conn 接口的直接收益，业务代码零改动）。
 // SetReadLimit 限制单条消息大小，防恶意客户端发超长帧撑爆内存。
 func (gw *Gateway) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	c, err := wsUpgrader.Upgrade(w, r, nil)
+	c, err := newUpgrader(gw.allowedOrigins).Upgrade(w, r, nil)
 	if err != nil {
 		gw.log.Error("websocket upgrade failed", zap.Error(err))
 		return

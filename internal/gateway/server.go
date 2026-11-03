@@ -46,6 +46,8 @@ type Gateway struct {
 	auth     *auth.Manager       // JWT 签发/校验（无状态 token）
 	bus      bus.Bus             // 消息总线：广播扇出 / 私聊定向，可外置（内存/NATS）
 
+	allowedOrigins []string // WebSocket Origin 白名单：空 = 放行所有（开发）；生产设真实域名
+
 	saveCh   chan store.Message // 持久化队列：广播先入队，saveLoop 后台落盘
 	saveDone chan struct{}      // saveLoop 退出信号，优雅关闭时靠它等 flush 完成
 	dropped  atomic.Int64       // 因发送队列满被丢弃的消息计数

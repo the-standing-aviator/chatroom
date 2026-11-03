@@ -10,6 +10,7 @@ import (
 	_ "net/http/pprof" // 仅副作用：init 里把 /debug/pprof/* 注册到 DefaultServeMux
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8888", "监听地址")
 	wsAddr := flag.String("ws-addr", "127.0.0.1:8890", "WebSocket 监听地址（浏览器前端接入）")
+	allowedOrigins := flag.String("allowed-origins", "", "WebSocket 允许的 Origin 白名单（逗号分隔）；空 = 放行所有（开发）")
 	node := flag.String("node", "", "节点身份 ID（默认取 -addr 值；多节点部署时须全局唯一）")
 	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径（-store sqlite 时使用）")
 	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
@@ -72,6 +74,18 @@ func main() {
 	}
 
 	gw := gateway.NewGateway(nodeID, *addr, logger, st, p, am, b)
+
+	// WebSocket Origin 白名单：生产设真实域名（如 https://chat.example.com），
+	// 杜绝别的网站用你的服务做跨站 WebSocket；空 = 放行所有（开发/本地）。
+	if *allowedOrigins != "" {
+		var origins []string
+		for _, o := range strings.Split(*allowedOrigins, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				origins = append(origins, o)
+			}
+		}
+		gw.SetAllowedOrigins(origins)
+	}
 
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。
