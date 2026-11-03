@@ -31,11 +31,11 @@ func main() {
 	node := flag.String("node", "", "节点身份 ID（默认取 -addr 值；多节点部署时须全局唯一）")
 	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径（-store sqlite 时使用）")
 	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
-	dsn := flag.String("dsn", "postgres://chat:chat@localhost:5432/chat?sslmode=disable", "PostgreSQL DSN（-store postgres 时使用）")
+	dsn := flag.String("dsn", envOr("COMMUNICATE_DSN", "postgres://chat:chat@localhost:5432/chat?sslmode=disable"), "PostgreSQL DSN（-store postgres 时使用；可用环境变量 COMMUNICATE_DSN 注入）")
 	metricsAddr := flag.String("metrics", ":9090", "Prometheus /metrics 监听地址")
 	presenceType := flag.String("presence", "memory", "在线状态后端：memory | redis")
 	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis 地址（-presence redis 时使用）")
-	jwtSecret := flag.String("jwt-secret", "dev-secret-change-me", "JWT 签名密钥（生产务必覆盖）")
+	jwtSecret := flag.String("jwt-secret", envOr("COMMUNICATE_JWT_SECRET", "dev-secret-change-me"), "JWT 签名密钥（生产务必覆盖；可用环境变量 COMMUNICATE_JWT_SECRET 注入）")
 	jwtTTL := flag.Duration("jwt-ttl", 24*time.Hour, "JWT 有效期")
 	busType := flag.String("bus", "memory", "消息总线后端：memory | nats")
 	natsURL := flag.String("nats-url", "nats://localhost:4222", "NATS 地址（-bus nats 时使用）")
@@ -131,6 +131,15 @@ func main() {
 	}
 	<-done // 等 Shutdown flush 完成
 	logger.Info("shutdown complete")
+}
+
+// envOr 返回环境变量 key 的值，未设置时回落默认值 def。
+// 用于把密钥（jwt-secret / dsn 密码等）从环境变量注入，避免写在命令行被 ps 看到。
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 // openStore 按 -store 选择存储后端，返回 Store 接口实现。
