@@ -411,6 +411,13 @@ func TestRename(t *testing.T) {
 	if m1.Type != protocol.TypeSystem || m1.Content != "已更新昵称为 carol" {
 		t.Fatalf("改名响应 = %+v", m1)
 	}
+	// 改名后必须重签 token（sub = 新名），否则前端重连用旧 token 会被打回旧名。
+	if m1.Token == "" {
+		t.Fatalf("改名后应重签 token，实际为空")
+	}
+	if name, err := gw.auth.Verify(m1.Token); err != nil || name != "carol" {
+		t.Fatalf("改名后 token sub = %q, err = %v，期望 carol", name, err)
+	}
 	m2 := readFrame(t, connA)
 	if m2.Type != protocol.TypeSystem || m2.Content != "alice 改名为 carol" {
 		t.Fatalf("改名广播 = %+v", m2)

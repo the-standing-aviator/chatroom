@@ -100,7 +100,8 @@ func (gw *Gateway) route(s *Session, m protocol.Message) {
 			s.send(protocol.Message{Type: protocol.TypeError, Error: err.Error()})
 			return
 		}
-		s.send(protocol.Message{Type: protocol.TypeSystem, Content: "已更新昵称为 " + newName, TS: time.Now().Unix()})
+		// 改名后重签 token（sub = 新名），否则前端重连时用旧 token 会被打回旧名。
+		s.send(protocol.Message{Type: protocol.TypeSystem, Content: "已更新昵称为 " + newName, Token: gw.issueToken(newName), TS: time.Now().Unix()})
 		gw.broadcastSystem(fmt.Sprintf("%s 改名为 %s", old, newName))
 
 	case protocol.TypeWho:

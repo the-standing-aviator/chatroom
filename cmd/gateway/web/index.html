@@ -27,9 +27,19 @@
   #app { width: min(1000px, 100vw); height: 100vh; display: flex; flex-direction: column; }
   header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); }
   header h1 { font-size: 18px; font-weight: 600; }
+  #header-right { display: flex; align-items: center; gap: 10px; }
   #conn-status { font-size: 13px; color: var(--muted); }
   #conn-status.ok { color: var(--ok); }
   #conn-status.err { color: var(--err); }
+  #rename-btn { padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 13px; cursor: pointer; }
+  #rename-btn:hover { border-color: var(--accent); color: var(--accent); }
+  #rename-btn.hidden { display: none; }
+  #rename-box { display: flex; align-items: center; gap: 6px; }
+  #rename-box.hidden { display: none; }
+  #rename-box input { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; width: 140px; outline: none; }
+  #rename-box input:focus { border-color: var(--accent); }
+  #rename-box button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 13px; cursor: pointer; }
+  #rename-box button:hover { border-color: var(--accent); }
   #main { flex: 1; display: flex; min-height: 0; }
   #sidebar { width: 200px; border-right: 1px solid var(--border); padding: 14px; overflow-y: auto; }
   #sidebar h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
@@ -71,7 +81,15 @@
   <div id="app">
     <header>
       <h1>communicate 聊天室</h1>
-      <span id="conn-status">连接中…</span>
+      <div id="header-right">
+        <span id="conn-status">连接中…</span>
+        <button id="rename-btn" type="button" class="hidden">改名</button>
+        <span id="rename-box" class="hidden">
+          <input id="rename-input" maxlength="32" placeholder="新昵称">
+          <button id="rename-ok" type="button">确定</button>
+          <button id="rename-cancel" type="button">取消</button>
+        </span>
+      </div>
     </header>
     <div id="main">
       <aside id="sidebar">
@@ -120,10 +138,16 @@
   const modeBar = $('mode-bar');
   const modeLabel = $('mode-label');
   const modeExit = $('mode-exit');
+  const renameBtn = $('rename-btn');
+  const renameBox = $('rename-box');
+  const renameInput = $('rename-input');
+  const renameOk = $('rename-ok');
+  const renameCancel = $('rename-cancel');
 
   let ws = null;
   let privateTo = null;
   let onlineUsers = [];
+  let renameOld = null; // 非 null = 改名乐观更新中，值为旧名（失败时回退）
   let myName = localStorage.getItem('communicate_name') || '';
   let pendingAuth = null; // 'token' | 'password'：正在鉴权中
   let heartbeat = null;
@@ -173,7 +197,10 @@
   function handle(m) {
     switch (m.type) {
       case 'system':
-        if (m.token) {
+        if (renameOld !== null && m.content.startsWith('已更新昵称为')) {
+          renameOld = null; // 改名成功，确认新名
+          if (m.token) localStorage.setItem('communicate_token', m.token); // 改名重签 token，重连后仍是新名
+        } else if (m.token) {
           localStorage.setItem('communicate_token', m.token);
           localStorage.setItem('communicate_name', myName);
           pendingAuth = null;
@@ -197,6 +224,13 @@
           pendingAuth = null;
           loginMsg.textContent = m.error;
           showLogin();
+        } else if (renameOld !== null) {
+          // 改名失败（昵称被占用等）：回退到旧名，刷新列表纠正「我」的高亮。
+          myName = renameOld;
+          renameOld = null;
+          localStorage.setItem('communicate_name', myName);
+          requestWho();
+          addLine('error', m.error, '', m.ts, '');
         } else {
           addLine('error', m.error, '', m.ts, '');
         }
@@ -288,6 +322,33 @@
   }
   modeExit.onclick = () => setPrivateMode(null);
 
+  function showRenameBox() {
+    renameBtn.classList.add('hidden');
+    renameBox.classList.remove('hidden');
+    renameInput.value = '';
+    renameInput.focus();
+  }
+  function hideRenameBox() {
+    renameBox.classList.add('hidden');
+    renameBtn.classList.remove('hidden');
+  }
+  function submitRename(newName) {
+    renameOld = myName; // 乐观更新前记住旧名，失败时回退
+    myName = newName;
+    localStorage.setItem('communicate_name', myName);
+    ws.send(JSON.stringify({ type: 'rename', new_name: newName }));
+    requestWho(); // 刷新列表，让「我」高亮指向新名
+    hideRenameBox();
+  }
+  renameBtn.onclick = showRenameBox;
+  renameCancel.onclick = hideRenameBox;
+  renameOk.onclick = () => {
+    const n = renameInput.value.trim();
+    if (!n) { renameInput.focus(); return; }
+    submitRename(n);
+  };
+  renameInput.onkeydown = (e) => { if (e.key === 'Enter') renameOk.onclick(); };
+
   function requestWho() {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'who' }));
   }
@@ -315,6 +376,8 @@
   function enableComposer(on) {
     input.disabled = !on;
     sendBtn.disabled = !on;
+    renameBtn.classList.toggle('hidden', !on);
+    if (!on) renameBox.classList.add('hidden');
     if (on) input.focus();
   }
   function showLogin(msg) {
