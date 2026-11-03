@@ -87,7 +87,8 @@ func main() {
 	// WebSocket 入口：浏览器通过 HTTP 升级到 WS，与 TCP 客户端共用同一套 gateway。
 	// 独立 ServeMux（不用 DefaultServeMux），避免与 metrics/pprof 的注册混在一起。
 	wsMux := http.NewServeMux()
-	wsMux.HandleFunc("/ws", gw.HandleWebSocket)
+	wsMux.Handle("/", webHandler())             // 静态前端：/ 出 index.html
+	wsMux.HandleFunc("/ws", gw.HandleWebSocket) // /ws 出 WebSocket 升级（比 / 更精确，优先匹配）
 	wsServer := &http.Server{Addr: *wsAddr, Handler: wsMux}
 	go func() {
 		logger.Info("websocket server started", zap.String("addr", *wsAddr))
