@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"net"
 	"sync"
 	"time"
 
@@ -16,7 +15,7 @@ const (
 
 // Session 表示一个已连接的客户端会话（含鉴权后的在线状态）。
 type Session struct {
-	conn    net.Conn
+	conn    conn // 传输连接（tcpConn/wsConn）：Session 只面向「消息」，不关心底层是字节流还是 WebSocket 帧
 	gateway *Gateway
 
 	nameMu sync.RWMutex
@@ -28,9 +27,9 @@ type Session struct {
 }
 
 // newSession 创建一个会话并启动写协程。
-func newSession(conn net.Conn, gw *Gateway) *Session {
+func newSession(c conn, gw *Gateway) *Session {
 	s := &Session{
-		conn:    conn,
+		conn:    c,
 		gateway: gw,
 		sendCh:  make(chan protocol.Message, sendBuffer),
 		sysCh:   make(chan protocol.Message, sysBuffer),
@@ -127,7 +126,7 @@ func (s *Session) writeLoop() {
 // writeOne 写出一帧消息；写失败（对端断开/超时）则关闭连接并返回 false。
 func (s *Session) writeOne(m protocol.Message) bool {
 	_ = s.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := protocol.WriteFrame(s.conn, m); err != nil {
+	if err := s.conn.WriteMessage(m); err != nil {
 		_ = s.conn.Close()
 		return false
 	}

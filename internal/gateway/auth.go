@@ -17,7 +17,7 @@ import (
 // 成功则设置会话昵称并返回 true。
 func (gw *Gateway) authenticate(s *Session) bool {
 	_ = s.conn.SetReadDeadline(time.Now().Add(authTimeout))
-	m, err := protocol.ReadFrame(s.conn)
+	m, err := s.conn.ReadMessage()
 	if err != nil {
 		return false
 	}

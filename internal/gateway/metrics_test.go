@@ -79,7 +79,7 @@ func TestMetricsDroppedCounter(t *testing.T) {
 	// 慢会话：net.Pipe 对端不读，writeLoop 阻塞在写第一条，sendCh 被后续消息填满。
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
-	s := newSession(serverConn, gw)
+	s := newSession(&tcpConn{Conn: serverConn}, gw)
 	defer s.close()
 
 	// 灌超过 sendCh(64) 的消息：前 65 条（1 条在写 + 64 缓冲）消化后，其余被 dropped 计数。

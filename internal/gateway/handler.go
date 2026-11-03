@@ -15,7 +15,7 @@ import (
 )
 
 // handle 处理一个客户端连接：鉴权 → 加入在线表 → 读循环路由消息。
-func (gw *Gateway) handle(conn net.Conn) {
+func (gw *Gateway) handle(c conn) {
 	// recover 兜底：单连接处理 panic 只影响该连接，不崩整个进程（修复 P1-1）。
 	defer func() {
 		if r := recover(); r != nil {
@@ -27,7 +27,7 @@ func (gw *Gateway) handle(conn net.Conn) {
 		// 连接由 writeLoop 在 flush 完发送队列后统一关闭（优雅关闭），这里不再直接关。
 	}()
 
-	sess := newSession(conn, gw)
+	sess := newSession(c, gw)
 	defer sess.close()
 
 	// 鉴权
@@ -46,13 +46,13 @@ func (gw *Gateway) handle(conn net.Conn) {
 		sess.setName("") // 复位，避免 close 时误广播"已下线"
 		return
 	}
-	gw.log.Info("user online", zap.String("name", sess.Name()), zap.String("addr", conn.RemoteAddr().String()))
+	gw.log.Info("user online", zap.String("name", sess.Name()), zap.String("addr", c.RemoteAddr()))
 	gw.broadcastSystem(fmt.Sprintf("%s 已上线", sess.Name()))
 
 	// 读循环：每轮刷新读超时，心跳会不断重置它；超时即判定断线。
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
-		m, err := protocol.ReadFrame(conn)
+		_ = c.SetReadDeadline(time.Now().Add(readTimeout))
+		m, err := c.ReadMessage()
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				sess.send(protocol.Message{Type: protocol.TypeError, Error: "长时间未活跃，已被断开"})

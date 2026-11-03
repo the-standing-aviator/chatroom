@@ -137,7 +137,7 @@ func (gw *Gateway) Start() error {
 		gw.handleWG.Add(1)
 		go func() {
 			defer gw.handleWG.Done()
-			gw.handle(conn)
+			gw.handle(&tcpConn{Conn: conn})
 		}()
 	}
 }

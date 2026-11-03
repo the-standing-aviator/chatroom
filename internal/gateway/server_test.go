@@ -77,7 +77,7 @@ func (f *fakeStore) Close() error { return nil }
 func startClient(t *testing.T, gw *Gateway) net.Conn {
 	t.Helper()
 	serverConn, clientConn := net.Pipe()
-	go gw.handle(serverConn)
+	go gw.handle(&tcpConn{Conn: serverConn})
 	t.Cleanup(func() { _ = clientConn.Close() })
 	return clientConn
 }
@@ -508,7 +508,7 @@ func TestSendSystemSeparateChannel(t *testing.T) {
 	// net.Pipe：对端不读，writeLoop 会阻塞在写第一条系统消息上（同步内存连接）。
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
-	s := newSession(serverConn, gw)
+	s := newSession(&tcpConn{Conn: serverConn}, gw)
 	defer s.close()
 
 	// 灌大量系统消息，远超 sysCh 缓冲(8)。满则静默丢，不计数。
