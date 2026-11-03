@@ -1,0 +1,41 @@
+# communicate 聊天接入节点 systemd 服务
+# 安装：sudo cp deploy/gateway.service /etc/systemd/system/communicate-gateway.service
+#       sudo systemctl daemon-reload && sudo systemctl enable --now communicate-gateway
+#
+# 说明：
+#   - gateway 监听本机回环（127.0.0.1），由 nginx/Caddy 做 TLS 终止后对外；
+#   - 密钥经 EnvironmentFile 注入（见 deploy/README.md），不写进命令行，避免 ps 泄露。
+
+[Unit]
+Description=communicate chat gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=communicate
+Group=communicate
+WorkingDirectory=/opt/communicate
+
+# 密钥（jwt-secret / dsn）从这里读；文件不存在也不报错（- 前缀）
+EnvironmentFile=-/etc/communicate/gateway.env
+
+# 单机最小可用：SQLite + 内存在线状态 + 内存总线（默认值即可，无需显式传）。
+# 分布式：追加 -store postgres / -presence redis / -bus nats 与对应地址。
+# 把 -allowed-origins 换成你的真实域名。
+ExecStart=/opt/communicate/chat-gateway \
+    -addr 127.0.0.1:8888 \
+    -ws-addr 127.0.0.1:8890 \
+    -metrics 127.0.0.1:9090 \
+    -allowed-origins https://chat.example.com
+
+Restart=always
+RestartSec=3
+
+# 连接数上去后必须调高 fd 上限，否则高并发 accept 报 EMFILE
+LimitNOFILE=1048576
+# 最小权限加固（可选）：禁止提权
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

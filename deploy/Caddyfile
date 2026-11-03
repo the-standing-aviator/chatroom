@@ -1,0 +1,8 @@
+# communicate 反向代理（Caddy 版，比 nginx 更省心）。
+# Caddy 自动申请/续期 Let's Encrypt 证书，且默认支持 WebSocket 升级。
+# 启动：sudo caddy run --config deploy/Caddyfile
+# 把域名换成你自己的。
+
+chat.example.com {
+    reverse_proxy 127.0.0.1:8890
+}

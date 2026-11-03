@@ -110,7 +110,7 @@
 ```
 communicate/
 ├── cmd/
-│   ├── gateway/       # 聊天接入节点（服务端入口）
+│   ├── gateway/       # 聊天接入节点（含 web/ 前端，//go:embed 打包）
 │   ├── client/        # 命令行聊天客户端
 │   ├── lb/            # L4 TCP 负载均衡器（round-robin）
 │   └── bench/         # 压测客户端（load generator）
@@ -123,6 +123,7 @@ communicate/
 │   └── store/         # 存储（SQLite / PostgreSQL）
 ├── scripts/
 │   └── run-cluster.sh # 一键起多节点集群（N gateway + 1 LB）
+├── deploy/            # 生产部署：systemd + nginx/Caddy + 部署手册
 ├── docs/              # 需求 / 设计 / 架构 / 复盘 / 问题记录
 ├── docker-compose.yml # 开发依赖：PostgreSQL + NATS + Redis
 └── go.mod
@@ -176,16 +177,21 @@ go run ./cmd/client -addr 127.0.0.1:9000
 ### gateway 参数
 
 ```
--addr        监听地址（默认 127.0.0.1:8888）
--ws-addr     WebSocket 监听地址（默认 127.0.0.1:8890，浏览器前端接入）
--node        节点身份 ID（多节点部署须全局唯一；默认回落 -addr）
--store       存储后端：sqlite | postgres
--dsn         PostgreSQL DSN（-store postgres 时）
--presence    在线状态：memory | redis
--bus         消息总线：memory | nats
--metrics     /metrics 与 pprof 监听地址（默认 :9090）
--jwt-secret  JWT 签名密钥（生产务必覆盖）
+-addr            监听地址（默认 127.0.0.1:8888）
+-ws-addr          WebSocket 监听地址（默认 127.0.0.1:8890，浏览器前端接入）
+-allowed-origins  WebSocket Origin 白名单（逗号分隔）；空 = 放行所有（开发）
+-node             节点身份 ID（多节点部署须全局唯一；默认回落 -addr）
+-store            存储后端：sqlite | postgres
+-dsn              PostgreSQL DSN（-store postgres 时；可读环境变量 COMMUNICATE_DSN）
+-presence         在线状态：memory | redis
+-bus              消息总线：memory | nats
+-metrics          /metrics 与 pprof 监听地址（默认 :9090）
+-jwt-secret       JWT 签名密钥（生产务必覆盖；可读环境变量 COMMUNICATE_JWT_SECRET）
 ```
+
+## 部署（公网）
+
+上线最小可用的部署方案：gateway 跑在 systemd 服务里，nginx（或 Caddy）做 TLS 终止 + WebSocket 反向代理，浏览器经 `https`/`wss` 接入。含密钥环境变量注入、systemd 单元、nginx/Caddy 配置与上线检查清单，详见 [`deploy/README.md`](deploy/README.md)。
 
 ## 压测
 
