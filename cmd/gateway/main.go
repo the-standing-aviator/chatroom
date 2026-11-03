@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -24,6 +25,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8888", "监听地址")
+	wsAddr := flag.String("ws-addr", "127.0.0.1:8890", "WebSocket 监听地址（浏览器前端接入）")
 	node := flag.String("node", "", "节点身份 ID（默认取 -addr 值；多节点部署时须全局唯一）")
 	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径（-store sqlite 时使用）")
 	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
@@ -82,6 +84,18 @@ func main() {
 		}
 	}()
 
+	// WebSocket 入口：浏览器通过 HTTP 升级到 WS，与 TCP 客户端共用同一套 gateway。
+	// 独立 ServeMux（不用 DefaultServeMux），避免与 metrics/pprof 的注册混在一起。
+	wsMux := http.NewServeMux()
+	wsMux.HandleFunc("/ws", gw.HandleWebSocket)
+	wsServer := &http.Server{Addr: *wsAddr, Handler: wsMux}
+	go func() {
+		logger.Info("websocket server started", zap.String("addr", *wsAddr))
+		if err := wsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("websocket server failed", zap.Error(err))
+		}
+	}()
+
 	// 监听退出信号，触发优雅关闭：flush 持久化队列后退出，正常关闭不丢消息。
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -90,6 +104,9 @@ func main() {
 	go func() {
 		sig := <-sigCh
 		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+		// 先停 WebSocket 监听（拒绝新升级），再 Shutdown 现有会话，
+		// 否则 Shutdown 等 handle 退出期间仍可能有新 WS 连进来导致永远等不到。
+		_ = wsServer.Close()
 		gw.Shutdown()
 		close(done)
 	}()

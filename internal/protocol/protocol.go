@@ -72,12 +72,9 @@ const (
 
 // WriteFrame 把一条消息编码为「长度前缀 + JSON」的帧写入 w。
 func WriteFrame(w io.Writer, m Message) error {
-	body, err := json.Marshal(m)
+	body, err := Marshal(m)
 	if err != nil {
-		return fmt.Errorf("marshal message: %w", err)
-	}
-	if len(body) > MaxFrameSize {
-		return errors.New("message too large")
+		return err
 	}
 
 	var hdr [4]byte
@@ -106,9 +103,27 @@ func ReadFrame(r io.Reader) (Message, error) {
 	if _, err := io.ReadFull(r, body); err != nil {
 		return Message{}, err
 	}
+	return Unmarshal(body)
+}
 
+// Marshal 把消息编码为 JSON 字节，超出 MaxFrameSize 返回错误。
+// TCP 帧复用它（再加长度前缀），WebSocket 文本帧也直接拿它当 payload——
+// 两种传输共用同一份编解码与大小/type 校验，逻辑不重复。
+func Marshal(m Message) ([]byte, error) {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("marshal message: %w", err)
+	}
+	if len(body) > MaxFrameSize {
+		return nil, errors.New("message too large")
+	}
+	return body, nil
+}
+
+// Unmarshal 从 JSON 字节解析出消息，校验 type 非空。
+func Unmarshal(data []byte) (Message, error) {
 	var m Message
-	if err := json.Unmarshal(body, &m); err != nil {
+	if err := json.Unmarshal(data, &m); err != nil {
 		return Message{}, fmt.Errorf("unmarshal message: %w", err)
 	}
 	if m.Type == "" {
