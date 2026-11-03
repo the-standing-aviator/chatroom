@@ -23,6 +23,13 @@ func OpenPostgres(dsn string) (*Postgres, error) {
 	}
 	// 与 SQLite 不同：PostgreSQL 支持并发读写，交给连接池管理，不再限制单连接
 	// （这正是 P2-4「单连接串行瓶颈」的修复点）。
+	//
+	// 但池必须设上限：database/sql 不 SetMaxOpenConns 时默认无上限，高并发下会
+	// 开满连接打爆 PG 的 max_connections（默认 100），报 SQLSTATE 53300「too many clients」。
+	// 上限取 40：给多节点部署留余量（2 节点共 80 < 100），超出部分在池内排队而非报错。
+	db.SetMaxOpenConns(40)
+	db.SetMaxIdleConns(40)
+	db.SetConnMaxLifetime(30 * time.Minute) // 防 PG 侧断开的长连接被复用
 
 	s := &Postgres{db: db}
 	if err := s.migrate(context.Background()); err != nil {
