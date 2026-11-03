@@ -163,6 +163,7 @@
           hideLogin();
           enableComposer(true);
           requestWho();
+          requestHistory();
           startWhoTimer();
         }
         addLine('system', m.content, '', m.ts, '');
@@ -185,6 +186,9 @@
         break;
       case 'who_list':
         renderUsers(m.users || []);
+        break;
+      case 'history':
+        renderHistory(m.messages || []);
         break;
       case 'pong':
         break;
@@ -243,6 +247,16 @@
 
   function requestWho() {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'who' }));
+  }
+  function requestHistory() {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'history', limit: 50 }));
+  }
+  function renderHistory(messages) {
+    // 后端按时间从旧到新返回；登录后一次性补上，让新来的看到刚才聊了什么。
+    for (const msg of messages) {
+      if (msg.type === 'chat') addLine('chat', msg.content, msg.from, msg.ts, '');
+      else if (msg.type === 'private') addLine('private', msg.content, msg.from, msg.ts, msg.to);
+    }
   }
   function startWhoTimer() { stopWhoTimer(); whoTimer = setInterval(requestWho, 30000); }
   function stopWhoTimer() { if (whoTimer) { clearInterval(whoTimer); whoTimer = null; } }
