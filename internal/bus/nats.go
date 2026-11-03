@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/nats-io/nats.go"
 
@@ -19,7 +20,16 @@ type NATS struct {
 
 // NewNATS 连接指定 URL 的 NATS 并返回总线实现。连接失败返回 error。
 func NewNATS(url string) (*NATS, error) {
-	nc, err := nats.Connect(url)
+	nc, err := nats.Connect(url, nats.ErrorHandler(func(_ *nats.Conn, sub *nats.Subscription, err error) {
+		if err == nats.ErrSlowConsumer {
+			// slow consumer：订阅方处理不过来，NATS 客户端开始丢消息。
+			// 用标准库 log（不经 zap，避免被生产日志采样吞掉），便于压测时观测。
+			dropped, _ := sub.Dropped()
+			log.Printf("NATS slow consumer: subject=%s dropped=%d", sub.Subject, dropped)
+		} else {
+			log.Printf("NATS error: %v", err)
+		}
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("connect nats %q: %w", url, err)
 	}

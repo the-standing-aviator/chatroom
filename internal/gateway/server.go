@@ -268,7 +268,11 @@ func (gw *Gateway) removeSession(s *Session) {
 		delete(gw.sessions, s.Name())
 	}
 	gw.mu.Unlock()
-	_ = gw.presence.Leave(s.Name())
+	// 之前是 `_ = gw.presence.Leave(...)` 静默吞错：一旦 Leave 失败（Redis 抖动等），
+	// 残留的在线登记会让同名用户之后永远「该用户已在线」。改为记错误，暴露问题。
+	if err := gw.presence.Leave(s.Name()); err != nil {
+		gw.log.Error("presence leave failed", zap.String("name", s.Name()), zap.Error(err))
+	}
 }
 
 // Shutdown 优雅关闭：停止接收新连接，关闭所有会话，并 flush 持久化队列。
