@@ -1,8 +1,15 @@
-# 开发环境依赖编排：V3 分布式阶段所需的外部服务。
-# 用法：docker compose up -d   （后台启动全部服务）
-#       docker compose down     （停止并移除容器，保留数据卷）
+# communicate 全栈编排：gateway + 依赖(PG/Redis/NATS) + 监控(Prometheus/Alertmanager/Grafana)
+# 一键起整套：
+#   docker compose up -d --build
+# 停止（保留数据卷）：
+#   docker compose down
+# 停止并清空数据卷：
+#   docker compose down -v
 #
-# 说明：凭据 chat/chat 仅供本地开发，勿用于生产。
+# 对外只暴露：gateway 8888(TCP) / 8890(WS+前端) + 监控 UI(9090/9093/3000)
+# PG / Redis / NATS 仅内部网络互通，不对外暴露（生产同理）。
+# 凭据 chat/chat 与 jwt-secret 仅本地开发，生产务必改（见 deploy/README.md）。
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -11,8 +18,6 @@ services:
       POSTGRES_USER: chat
       POSTGRES_PASSWORD: chat
       POSTGRES_DB: chat
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -20,23 +25,109 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-
-  nats:
-    image: nats:2.10-alpine
-    container_name: communicate-nats
-    ports:
-      - "4222:4222" # 客户端连接端口（core NATS，不用 JetStream）
+    restart: unless-stopped
+    # 本地要 psql 调试时，临时取消注释：
+    # ports: ["5432:5432"]
 
   redis:
     image: redis:7-alpine
     container_name: communicate-redis
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: communicate-nats
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: communicate-gateway:local
+    container_name: communicate-gateway
+    command:
+      - -addr
+      - :8888
+      - -ws-addr
+      - :8890
+      - -metrics
+      - :9100
+      - -store
+      - postgres
+      - -presence
+      - redis
+      - -redis-addr
+      - redis:6379
+      - -bus
+      - nats
+      - -nats-url
+      - nats://nats:4222
+    environment:
+      # 密钥走环境变量（对应裸机 systemd 的 EnvironmentFile 思路，不进 command 防泄露）
+      COMMUNICATE_DSN: postgres://chat:chat@postgres:5432/chat?sslmode=disable
+      COMMUNICATE_JWT_SECRET: dev-secret-change-me
+    ports:
+      - "8888:8888"   # TCP 客户端
+      - "8890:8890"   # WebSocket 升级 + 浏览器前端（http://localhost:8890）
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: communicate-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'   # 本地只留 15 天，长存交给后续远程存储
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: communicate-alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./deploy/prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: communicate-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin          # TODO 上线前必改
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
 
 volumes:
   pgdata:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:

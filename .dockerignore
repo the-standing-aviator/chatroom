@@ -1,0 +1,8 @@
+# 排除与编译无关的文件，缩小构建上下文、避免把本地状态带进镜像
+.git
+chat.db
+*.db
+*.log
+deploy/
+docs/
+tmp/
