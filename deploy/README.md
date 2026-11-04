@@ -8,6 +8,31 @@ nginx（或 Caddy）做 **TLS 终止 + WebSocket 反向代理**，浏览器经 `
                                                 └─ TCP 终端客户端 -addr 127.0.0.1:8888（默认不对外）
 ```
 
+## 0. 容器化一键部署（推荐）
+
+现在 gateway + PG/Redis/NATS + 监控全部容器化，一条命令起整套（本地 = 生产）：
+
+```bash
+docker compose up -d --build
+```
+
+对外端口：
+
+| 端口 | 用途 |
+|---|---|
+| 8890 | 浏览器前端 + WebSocket（http://<服务器>:8890） |
+| 8888 | TCP 终端客户端 |
+| 3000 / 9090 / 9093 | Grafana / Prometheus / Alertmanager UI |
+
+生产上线注意：
+
+- 密钥：改 `docker-compose.yml` 里的 `COMMUNICATE_JWT_SECRET`，别用 `dev-secret-change-me`。
+- Grafana 默认 `admin/admin` 上线前必改。
+- `-allowed-origins` 默认空 = 放行所有 Origin，上线前在 gateway 的 `command` 里加 `-allowed-origins https://你的域名`。
+- 正式环境建议在 gateway 前挂 nginx/Caddy 做 TLS（下方第 6 节的 nginx 反代配置逻辑相同，把 upstream 换成 `gateway:8890`）。
+
+> 下方「systemd + 裸机」是备选部署方式（无 Docker 环境时用），逻辑等价，二选一即可。
+
 ## 前置
 
 - 一台 Linux 服务器（示例用 Ubuntu 24.04），有公网 IP，域名 `chat.example.com` 的 A 记录指向它。
