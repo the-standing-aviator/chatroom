@@ -34,7 +34,7 @@ func main() {
 	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径（-store sqlite 时使用）")
 	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
 	dsn := flag.String("dsn", envOr("COMMUNICATE_DSN", "postgres://chat:chat@localhost:5432/chat?sslmode=disable"), "PostgreSQL DSN（-store postgres 时使用；可用环境变量 COMMUNICATE_DSN 注入）")
-	metricsAddr := flag.String("metrics", ":9090", "Prometheus /metrics 监听地址")
+	metricsAddr := flag.String("metrics", ":9100", "Prometheus /metrics 监听地址")
 	presenceType := flag.String("presence", "memory", "在线状态后端：memory | redis")
 	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis 地址（-presence redis 时使用）")
 	jwtSecret := flag.String("jwt-secret", envOr("COMMUNICATE_JWT_SECRET", "dev-secret-change-me"), "JWT 签名密钥（生产务必覆盖；可用环境变量 COMMUNICATE_JWT_SECRET 注入）")

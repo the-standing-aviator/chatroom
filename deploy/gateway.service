@@ -23,10 +23,12 @@ EnvironmentFile=-/etc/communicate/gateway.env
 # 单机最小可用：SQLite + 内存在线状态 + 内存总线（默认值即可，无需显式传）。
 # 分布式：追加 -store postgres / -presence redis / -bus nats 与对应地址。
 # 把 -allowed-origins 换成你的真实域名。
+# -metrics 绑 :9100（全网卡）：让 Docker 里的 Prometheus 经 host-gateway 抓到；
+#   生产用防火墙/安全组挡住 9100 对外，不要暴露公网。
 ExecStart=/opt/communicate/chat-gateway \
     -addr 127.0.0.1:8888 \
     -ws-addr 127.0.0.1:8890 \
-    -metrics 127.0.0.1:9090 \
+    -metrics :9100 \
     -allowed-origins https://chat.example.com
 
 Restart=always

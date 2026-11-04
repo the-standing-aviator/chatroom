@@ -12,9 +12,9 @@ scrape_configs:
   - job_name: communicate
     metrics_path: /metrics
     static_configs:
-      # 生产上 gateway 的 -metrics 监听 127.0.0.1:9090。
+      # 生产上 gateway 的 -metrics 监听 :9100（全网卡，防火墙挡对外）。
       # Prometheus 跑在 Docker 里时用 host.docker.internal 访问宿主机（compose 配了 host-gateway）。
-      # 若 Prometheus 直接跑在宿主机（非容器），把下面改成 localhost:9090。
-      - targets: [host.docker.internal:9090]
+      # 若 Prometheus 直接跑在宿主机（非容器），把下面改成 localhost:9100。
+      - targets: [host.docker.internal:9100]
         labels:
           service: communicate

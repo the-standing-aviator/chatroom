@@ -6,8 +6,8 @@
 #   Prometheus  UI: http://localhost:9090
 #   Alertmanager UI: http://localhost:9093
 #
-# 前置：gateway 已在宿主机跑起来，且 -metrics 监听 127.0.0.1:9090（见 deploy/gateway.service）。
-#       Prometheus 容器通过 host.docker.internal 访问宿主机回环上的 gateway 指标端口。
+# 前置：gateway 已在宿主机跑起来，且 -metrics 监听 :9100（见 deploy/gateway.service，生产用防火墙挡对外）。
+#       Prometheus 容器通过 host.docker.internal 访问宿主机的 gateway 指标端口。
 
 services:
   prometheus:
@@ -23,7 +23,7 @@ services:
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     extra_hosts:
-      # 让容器能访问宿主机回环上的 gateway 指标（127.0.0.1:9090）。
+      # 让容器能访问宿主机上的 gateway 指标（:9100，非回环，否则 host-gateway 够不到）。
       # host-gateway 是 Docker 20.10+ 的魔法值，自动解析到宿主机 IP。
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
