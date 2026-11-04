@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS messages (
 	ts      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
+CREATE TABLE IF NOT EXISTS files (
+	id       TEXT PRIMARY KEY,
+	name     TEXT NOT NULL,
+	size     INTEGER NOT NULL,
+	uploader TEXT NOT NULL,
+	ts       INTEGER NOT NULL
+);
 `
 	_, err := s.db.ExecContext(ctx, schema)
 	return err
@@ -113,6 +120,29 @@ func (s *SQLite) ListMessages(limit int) ([]Message, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// SaveFile 保存文件元数据。
+func (s *SQLite) SaveFile(f File) error {
+	_, err := s.db.Exec(
+		`INSERT INTO files (id, name, size, uploader, ts) VALUES (?, ?, ?, ?, ?)`,
+		f.ID, f.Name, f.Size, f.Uploader, f.TS.Unix(),
+	)
+	return err
+}
+
+// GetFile 按 id 查询文件元数据，不存在返回 ErrNotFound。
+func (s *SQLite) GetFile(id string) (File, error) {
+	var f File
+	var ts int64
+	err := s.db.QueryRow(
+		`SELECT id, name, size, uploader, ts FROM files WHERE id = ?`, id,
+	).Scan(&f.ID, &f.Name, &f.Size, &f.Uploader, &ts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, ErrNotFound
+	}
+	f.TS = time.Unix(ts, 0)
+	return f, err
 }
 
 // Close 释放底层资源。

@@ -57,6 +57,13 @@ func (s *Postgres) migrate(ctx context.Context) error {
 			ts      TIMESTAMPTZ NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts)`,
+		`CREATE TABLE IF NOT EXISTS files (
+			id       TEXT PRIMARY KEY,
+			name     TEXT NOT NULL,
+			size     BIGINT NOT NULL,
+			uploader TEXT NOT NULL,
+			ts       TIMESTAMPTZ NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -122,6 +129,27 @@ func (s *Postgres) ListMessages(limit int) ([]Message, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// SaveFile 保存文件元数据。
+func (s *Postgres) SaveFile(f File) error {
+	_, err := s.db.Exec(
+		`INSERT INTO files (id, name, size, uploader, ts) VALUES ($1, $2, $3, $4, $5)`,
+		f.ID, f.Name, f.Size, f.Uploader, f.TS,
+	)
+	return err
+}
+
+// GetFile 按 id 查询文件元数据，不存在返回 ErrNotFound。
+func (s *Postgres) GetFile(id string) (File, error) {
+	var f File
+	err := s.db.QueryRow(
+		`SELECT id, name, size, uploader, ts FROM files WHERE id = $1`, id,
+	).Scan(&f.ID, &f.Name, &f.Size, &f.Uploader, &f.TS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, ErrNotFound
+	}
+	return f, err
 }
 
 // Close 释放底层资源。

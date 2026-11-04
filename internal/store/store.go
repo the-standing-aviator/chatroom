@@ -19,11 +19,20 @@ type User struct {
 // Message 表示一条需要持久化的消息。
 type Message struct {
 	ID      int64
-	Type    string // chat / private
+	Type    string // chat / private / file
 	From    string
 	To      string // 私聊目标，公聊为空
 	Content string
 	TS      time.Time
+}
+
+// File 表示一个已上传文件的元数据（文件字节单独存，见 internal/storage）。
+type File struct {
+	ID       string    // 全局唯一 id（服务端生成），即下载路径 /download/{id}
+	Name     string    // 原始文件名（展示与下载提示用）
+	Size     int64     // 字节数
+	Uploader string    // 上传者昵称
+	TS       time.Time // 上传时间
 }
 
 // ErrNotFound 表示记录不存在。
@@ -42,6 +51,10 @@ type Store interface {
 	SaveMessage(m Message) error
 	// ListMessages 返回最近的 limit 条消息，按时间升序。
 	ListMessages(limit int) ([]Message, error)
+	// SaveFile 保存文件元数据。
+	SaveFile(f File) error
+	// GetFile 按 id 查询文件元数据，不存在返回 ErrNotFound。
+	GetFile(id string) (File, error)
 	// Close 释放底层资源。
 	Close() error
 }
