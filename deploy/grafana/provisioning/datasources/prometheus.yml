@@ -1,0 +1,11 @@
+# Grafana 数据源自动装配：启动时自动把 Prometheus 注册进 Grafana，无需手点 UI。
+# 由 docker-compose.monitoring.yml 挂到 /etc/grafana/provisioning/datasources/。
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus                 # 给固定 uid，dashboard JSON 里用它引用，避免靠 name 漂移
+    type: prometheus
+    access: proxy                   # Grafana 后端代抓（走容器网络），浏览器不直连 Prometheus
+    url: http://prometheus:9090     # 同 compose 网络内用服务名直连
+    isDefault: true

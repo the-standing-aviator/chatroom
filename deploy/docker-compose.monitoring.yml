@@ -40,6 +40,24 @@ services:
       - alertmanager_data:/alertmanager
     restart: unless-stopped
 
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: communicate-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin          # TODO 上线前必改（或走环境变量注入）
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro   # 数据源 + dashboard 自动装配
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro   # dashboard JSON 只读挂载
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   prometheus_data:
   alertmanager_data:
+  grafana_data:

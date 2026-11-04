@@ -1,0 +1,13 @@
+# Dashboard 自动装配：告诉 Grafana 去哪个目录找 dashboard JSON 文件并自动加载。
+apiVersion: 1
+
+providers:
+  - name: communicate              # provider 名字，UI 里可见
+    orgId: 1
+    folder: ''                     # 空 = 放通用 General 文件夹
+    type: file
+    disableDeletion: false         # 磁盘删掉 JSON，Grafana 里也跟着删
+    updateIntervalSeconds: 30      # 每 30s 扫一次目录，改 JSON 热生效
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards   # 对应 compose 挂载的 dashboard 目录
