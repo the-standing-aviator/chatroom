@@ -1,0 +1,37 @@
+# 告警规则：Prometheus 每 evaluation_interval 评估一次，条件持续满足 for 时长才触发，
+# 避免瞬时抖动误报。触发后交给 Alertmanager 去重、分组、发送（见 alertmanager.yml）。
+groups:
+  - name: communicate
+    rules:
+      # 1. 服务挂了：抓不到 gateway 指标（进程死 / 端口不通 / 反代断等）。
+      #    up 是 Prometheus 自带的「抓取成败」指标：1=成功，0=失败。
+      - alert: GatewayDown
+        expr: up{job="communicate"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "communicate gateway 抓取失败"
+          description: "连续 1 分钟抓不到 {{ $labels.instance }} 的指标，服务可能已挂，立刻查。"
+
+      # 2. 背压掉消息：有消息因发送队列满被丢弃（慢客户端不读 / 刷屏）。
+      #    chat_dropped_messages_total 是累计计数，rate()[5m] 取近 5 分钟每秒丢弃速率。
+      - alert: MessagesDropped
+        expr: rate(chat_dropped_messages_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "消息在被丢弃（背压）"
+          description: "{{ $labels.instance }} 近 5 分钟平均每秒丢弃 {{ $value }} 条消息，可能有慢客户端或刷屏。"
+
+      # 3. 协程泄漏：goroutine 数异常偏高。每连接约 2~3 个（handle + writeLoop 等），
+      #    正常几千内。阈值是经验值，先给 5000，上线后按实际在线量校准。
+      - alert: GoroutineLeak
+        expr: chat_goroutines > 5000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "goroutine 数量异常偏高"
+          description: "{{ $labels.instance }} goroutine 数 {{ $value }}，疑似协程泄漏，查 handle/writeLoop 是否正常退出。"

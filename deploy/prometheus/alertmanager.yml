@@ -1,0 +1,39 @@
+# Alertmanager：接收 Prometheus 触发的告警，做「去重 / 分组 / 抑制」，再路由到通知渠道。
+# 由 docker-compose.monitoring.yml 挂载进 Alertmanager 容器。
+#
+# 一条告警的旅程：
+#   Prometheus 评估 alerts.yml 命中规则 → 推给 Alertmanager
+#   → 按 route 分组攒批 → 命中 receiver → 发通知
+
+route:
+  # 兜底接收器：没有更细的 routing 规则时，所有告警都走这里。
+  receiver: 'default-webhook'
+  # 按「告警名 + 服务」分组：同一服务同一类型的事故合并成一条通知，避免一条条刷屏。
+  group_by: ['alertname', 'service']
+  # 收到组内第一条告警后等 30s，把随后进来的同组告警攒到一起再发（扛住启动/抖动期）。
+  group_wait: 30s
+  # 同一组又有新告警时，隔多久再发一次更新。
+  group_interval: 5m
+  # 同一告警持续未恢复，隔多久重复提醒一次（避免 4h 内重复轰炸）。
+  repeat_interval: 4h
+  # 告警从「已触发」回到「已恢复」后，等多久才确认真的恢复（防止指标抖动瞬间恢复又触发）。
+  resolve_timeout: 5m
+
+receivers:
+  - name: 'default-webhook'
+    webhook_configs:
+      # 万能示例：把告警以 JSON POST 到任意 HTTP 端点。下面 URL 是占位，不会真发到哪。
+      # 上线前换成你自己的渠道（三选一，删掉不用的即可）：
+      #   邮件：  email_configs:  [{ to: 'you@example.com', ... }]（还需在 global 配 SMTP）
+      #   Slack： slack_configs:  [{ api_url: 'https://hooks.slack.com/services/...' }]
+      #   飞书/钉钉：直接用对方机器人的 webhook URL 填在这里
+      - url: 'http://localhost:9093/webhook-demo'
+
+inhibit_rules:
+  # 抑制：GatewayDown 已触发时，同一服务的「掉消息 / 协程泄漏」是它的下游症状，先别一起轰炸。
+  # 根因是服务挂了——把服务救活，症状自然消失。
+  - source_match:
+      alertname: 'GatewayDown'
+    target_match_re:
+      alertname: 'MessagesDropped|GoroutineLeak'
+    equal: ['service']
