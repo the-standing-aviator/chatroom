@@ -21,6 +21,7 @@ import (
 	"communicate/internal/bus"
 	"communicate/internal/gateway"
 	"communicate/internal/presence"
+	"communicate/internal/storage"
 	"communicate/internal/store"
 )
 
@@ -32,6 +33,7 @@ func main() {
 	msgBurst := flag.Int("msg-burst", 10, "每客户端消息令牌桶容量（允许的短突发）")
 	node := flag.String("node", "", "节点身份 ID（默认取 -addr 值；多节点部署时须全局唯一）")
 	dbPath := flag.String("db", "chat.db", "SQLite 数据库文件路径（-store sqlite 时使用）")
+	fileDir := flag.String("file-dir", "./files", "文件存储目录（本地磁盘实现，独立于数据库；V5 多机换对象存储时只改这里）")
 	storeType := flag.String("store", "sqlite", "存储后端：sqlite | postgres")
 	dsn := flag.String("dsn", envOr("COMMUNICATE_DSN", "postgres://chat:chat@localhost:5432/chat?sslmode=disable"), "PostgreSQL DSN（-store postgres 时使用；可用环境变量 COMMUNICATE_DSN 注入）")
 	metricsAddr := flag.String("metrics", ":9100", "Prometheus /metrics 监听地址")
@@ -92,6 +94,14 @@ func main() {
 	// 消息限流：每会话令牌桶，挡「广播 1 进 N 出」的放大式刷屏；0 = 不限流。
 	gw.SetMsgRateLimit(*msgRate, *msgBurst)
 
+	// 文件存储：V4 用本地磁盘（单节点够用）；V5 多机时换成对象存储实现同一个
+	// storage.Storage 接口，/upload、/download 与聊天链路零改动。
+	disk, err := storage.NewDisk(*fileDir)
+	if err != nil {
+		logger.Fatal("init file storage failed", zap.Error(err))
+	}
+	gw.SetStorage(disk)
+
 	// 可观测：注册指标并起独立 HTTP 端口，暴露 /metrics（Prometheus 拉取）与
 	// /debug/pprof/*（性能分析）。两者都挂在 DefaultServeMux，同一端口统一管理。
 	gateway.RegisterMetrics(prometheus.DefaultRegisterer, gw)
@@ -106,8 +116,10 @@ func main() {
 	// WebSocket 入口：浏览器通过 HTTP 升级到 WS，与 TCP 客户端共用同一套 gateway。
 	// 独立 ServeMux（不用 DefaultServeMux），避免与 metrics/pprof 的注册混在一起。
 	wsMux := http.NewServeMux()
-	wsMux.Handle("/", webHandler())             // 静态前端：/ 出 index.html
-	wsMux.HandleFunc("/ws", gw.HandleWebSocket) // /ws 出 WebSocket 升级（比 / 更精确，优先匹配）
+	wsMux.Handle("/", webHandler())                 // 静态前端：/ 出 index.html
+	wsMux.HandleFunc("/ws", gw.HandleWebSocket)     // /ws 出 WebSocket 升级（比 / 更精确，优先匹配）
+	wsMux.HandleFunc("/upload", gw.HandleUpload)    // 文件上传（POST，需 JWT）
+	wsMux.HandleFunc("/download/", gw.HandleDownload) // 文件下载 /download/{id}（GET）
 	wsServer := &http.Server{Addr: *wsAddr, Handler: wsMux}
 	go func() {
 		logger.Info("websocket server started", zap.String("addr", *wsAddr))

@@ -17,6 +17,7 @@ import (
 	"communicate/internal/bus"
 	"communicate/internal/presence"
 	"communicate/internal/protocol"
+	"communicate/internal/storage"
 	"communicate/internal/store"
 )
 
@@ -40,6 +41,8 @@ type Gateway struct {
 	addr  string // 监听地址：仅 net.Listen 用
 	log   *zap.Logger
 	store store.Store
+	// storage 存文件字节，HTTP /upload、/download 用；nil = 未配置（文件功能禁用）。
+	storage storage.Storage
 
 	mu       sync.RWMutex
 	sessions map[string]*Session // 本地投递表：昵称 → 本节点持有的会话
