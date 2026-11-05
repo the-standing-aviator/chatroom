@@ -120,15 +120,21 @@ func (s *Postgres) SaveMessage(m Message) error {
 	return err
 }
 
-// ListMessages 返回最近的 limit 条消息，按时间升序（最旧在前，最新在后）。
-func (s *Postgres) ListMessages(limit int) ([]Message, error) {
+// ListMessages 返回 viewer 有权看到的最近 limit 条消息，按时间升序（最旧在前，最新在后）。
+//
+// 可见性规则：公聊（"to" 为空）所有人可见；私聊只有 from/to 是 viewer 本人的可见。
+// 过滤放在 SQL 里而不是查出来再筛，是为了让 limit 的语义正确——否则先取 limit 条
+// 再过滤，viewer 可能拿到远少于 limit 条消息。
+func (s *Postgres) ListMessages(viewer string, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	rows, err := s.db.Query(`
 		SELECT id, type, "from", "to", content, file_id, file_name, file_size, ts FROM (
-			SELECT * FROM messages ORDER BY id DESC LIMIT $1
-		) ORDER BY id ASC`, limit)
+			SELECT * FROM messages
+			WHERE "to" = '' OR "from" = $1 OR "to" = $1
+			ORDER BY id DESC LIMIT $2
+		) ORDER BY id ASC`, viewer, limit)
 	if err != nil {
 		return nil, err
 	}

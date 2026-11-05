@@ -76,7 +76,7 @@ func TestPostgresListMessagesOrderAndLimit(t *testing.T) {
 	}
 
 	// limit=3 应返回最近 3 条，且按时间升序（msg-2 → msg-4）
-	msgs, err := st.ListMessages(3)
+	msgs, err := st.ListMessages("alice", 3)
 	if err != nil {
 		t.Fatalf("ListMessages: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestPostgresListMessagesOrderAndLimit(t *testing.T) {
 	}
 
 	// limit 超过总数时返回全部
-	all, err := st.ListMessages(10)
+	all, err := st.ListMessages("alice", 10)
 	if err != nil {
 		t.Fatalf("ListMessages(10): %v", err)
 	}
@@ -102,7 +102,7 @@ func TestPostgresListMessagesOrderAndLimit(t *testing.T) {
 func TestPostgresListMessagesEmpty(t *testing.T) {
 	st := newTestPostgres(t)
 
-	msgs, err := st.ListMessages(0)
+	msgs, err := st.ListMessages("alice", 0)
 	if err != nil {
 		t.Fatalf("ListMessages: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestPostgresMessageFileFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("SaveMessage(file): %v", err)
 	}
 
-	msgs, err := st.ListMessages(10)
+	msgs, err := st.ListMessages("alice", 10)
 	if err != nil {
 		t.Fatalf("ListMessages: %v", err)
 	}
@@ -148,4 +148,14 @@ func TestPostgresMessageFileFieldsRoundTrip(t *testing.T) {
 		msgs[1].FileName != fileMsg.FileName || msgs[1].FileSize != fileMsg.FileSize {
 		t.Fatalf("文件消息字段 = %+v，期望 %+v", msgs[1], fileMsg)
 	}
+}
+
+// TestPostgresPrivateMessageVisibility 验证私聊不泄漏给第三方（PostgreSQL 实现）。
+func TestPostgresPrivateMessageVisibility(t *testing.T) {
+	assertPrivateMessagesHidden(t, newTestPostgres(t))
+}
+
+// TestPostgresLimitAfterVisibilityFilter 验证 limit 在可见性过滤之后生效（PostgreSQL）。
+func TestPostgresLimitAfterVisibilityFilter(t *testing.T) {
+	assertLimitAppliesAfterVisibilityFilter(t, newTestPostgres(t))
 }

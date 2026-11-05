@@ -115,7 +115,8 @@ func (gw *Gateway) route(s *Session, m protocol.Message) {
 		s.send(protocol.Message{Type: protocol.TypeWhoList, Users: gw.who(), TS: time.Now().Unix()})
 
 	case protocol.TypeHistory:
-		msgs, err := gw.store.ListMessages(m.Limit)
+		// 按 s.Name() 过滤：只返回公聊 + 与自己相关的私聊，防止私聊内容泄漏给第三方。
+		msgs, err := gw.store.ListMessages(s.Name(), m.Limit)
 		if err != nil {
 			gw.log.Error("list messages failed", zap.Error(err))
 			s.send(protocol.Message{Type: protocol.TypeError, Error: "查询历史失败"})

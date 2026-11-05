@@ -60,13 +60,20 @@ func (f *fakeStore) SaveMessage(m store.Message) error {
 	return nil
 }
 
-func (f *fakeStore) ListMessages(limit int) ([]store.Message, error) {
+func (f *fakeStore) ListMessages(viewer string, limit int) ([]store.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if limit <= 0 || limit > len(f.msgs) {
-		limit = len(f.msgs)
+	// 与真实实现保持同一套可见性规则：公聊所有人可见，私聊只有收发双方可见。
+	visible := make([]store.Message, 0, len(f.msgs))
+	for _, m := range f.msgs {
+		if m.To == "" || m.From == viewer || m.To == viewer {
+			visible = append(visible, m)
+		}
 	}
-	return append([]store.Message(nil), f.msgs[len(f.msgs)-limit:]...), nil
+	if limit <= 0 || limit > len(visible) {
+		limit = len(visible)
+	}
+	return append([]store.Message(nil), visible[len(visible)-limit:]...), nil
 }
 
 func (f *fakeStore) SaveFile(fi store.File) error {

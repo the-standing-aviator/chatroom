@@ -52,8 +52,11 @@ type Store interface {
 	GetUser(name string) (User, error)
 	// SaveMessage 保存一条消息。
 	SaveMessage(m Message) error
-	// ListMessages 返回最近的 limit 条消息，按时间升序。
-	ListMessages(limit int) ([]Message, error)
+	// ListMessages 返回 viewer 有权看到的最近 limit 条消息，按时间升序。
+	//
+	// viewer 是发起查询的用户昵称，用于过滤私聊：公聊（To 为空）所有人可见，
+	// 私聊只有收发双方可见。不传 viewer 就等于把所有人的私聊泄漏给每个请求方。
+	ListMessages(viewer string, limit int) ([]Message, error)
 	// SaveFile 保存文件元数据。
 	SaveFile(f File) error
 	// GetFile 按 id 查询文件元数据，不存在返回 ErrNotFound。
