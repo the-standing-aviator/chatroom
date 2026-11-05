@@ -8,5 +8,8 @@ bin/
 *.db-wal
 *.db-shm
 
+# 本地跑时上传的文件（-file-dir 默认 ./files，运行时生成）
+files/
+
 # 系统文件
 .DS_Store

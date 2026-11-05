@@ -71,6 +71,11 @@ services:
       # 密钥走环境变量（对应裸机 systemd 的 EnvironmentFile 思路，不进 command 防泄露）
       COMMUNICATE_DSN: postgres://chat:chat@postgres:5432/chat?sslmode=disable
       COMMUNICATE_JWT_SECRET: dev-secret-change-me
+    volumes:
+      # 上传的文件必须落在具名卷上：否则 docker compose down/up 或 --build 重建容器时，
+      # 字节随容器可写层一起消失，而 PG 里 files 表元数据还在 —— 下载会 404，属于静默丢数据。
+      # 镜像里 WORKDIR 是 /data，-file-dir 默认 ./files 即 /data/files。
+      - gateway_files:/data
     ports:
       - "8888:8888"   # TCP 客户端
       - "8890:8890"   # WebSocket 升级 + 浏览器前端（http://localhost:8890）
@@ -131,3 +136,4 @@ volumes:
   prometheus_data:
   alertmanager_data:
   grafana_data:
+  gateway_files:   # 上传文件字节（元数据在 PG 的 files 表，字节在这里）

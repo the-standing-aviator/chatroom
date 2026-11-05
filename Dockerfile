@@ -20,10 +20,23 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/chat-ga
 FROM alpine:3.20
 
 # 非 root 用户（对应裸机 systemd 的 User=communicate）
-RUN addgroup -S communicate && adduser -S -G communicate communicate
-USER communicate
+# 同时建好数据目录并 chown：-file-dir 默认是相对路径 ./files，靠下面的 WORKDIR /data
+# 落到 /data/files。目录必须在切 USER 之前就建好且属于 communicate，否则非 root 启动时
+# storage.NewDisk 的 MkdirAll 会 permission denied，进程 Fatal 退出（容器无限重启）。
+RUN addgroup -S communicate && adduser -S -G communicate communicate \
+ && mkdir -p /data/files \
+ && chown -R communicate:communicate /data
 
 COPY --from=build /out/chat-gateway /usr/local/bin/chat-gateway
+
+# 工作目录设成数据目录，让默认的 ./files 落在持久化的 /data 下
+WORKDIR /data
+
+# 声明 /data 为数据卷：裸 docker run 不给 -v 时也不至于把上传的文件写进容器可写层，
+# 容器一删文件就没了。docker compose 里由具名卷 gateway_files 显式挂载。
+VOLUME ["/data"]
+
+USER communicate
 
 # 8888 TCP 客户端 / 8890 WebSocket+前端 / 9100 Prometheus 指标
 EXPOSE 8888 8890 9100

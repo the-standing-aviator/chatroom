@@ -6,3 +6,7 @@ chat.db
 deploy/
 docs/
 tmp/
+
+# 本地跑时上传的文件（-file-dir 默认 ./files）：不进构建上下文，
+# 否则每次构建都要打包一堆用户数据，还会让层缓存失效。
+files/
