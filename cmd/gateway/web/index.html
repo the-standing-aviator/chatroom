@@ -486,7 +486,9 @@
         body: fd,
       });
       if (!res.ok) {
-        addLine('error', '上传失败（' + res.status + '）', '', Math.floor(Date.now() / 1000), '');
+        // 服务端对「文件过大」等错误给了明确文案，直接透出来，别让用户只看到状态码。
+        const msg = (await res.text()).trim();
+        addLine('error', '上传失败（' + res.status + '）' + (msg ? '：' + msg : ''), '', Math.floor(Date.now() / 1000), '');
         return;
       }
       const data = await res.json();

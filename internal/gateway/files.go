@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -26,8 +27,13 @@ import (
 //   2. 客户端用 file_id 发一条 WS 的 TypeFile 消息 → broadcastFile 广播元数据给在线用户。
 // 下载时其他用户拿 file_id 拼 /download/{id} 即可取回字节。
 
-// maxUploadBytes 单文件上传上限：10 MiB。防恶意/误操作的大文件打爆磁盘与内存；
+// maxUploadBytes 上传请求体上限：10 MiB。防恶意/误操作的大文件打爆磁盘与内存；
 // 真正支持大文件时再改成可配置或走分片上传。
+//
+// 注意它限制的是**整个 HTTP 请求体**（交给 http.MaxBytesReader），不是文件字节数：
+// multipart 编码的 boundary 与头部有几百字节开销，所以文件本身必须略小于 10 MiB。
+// 因此「正好 10 MiB 的文件」会被拒绝（413）——这是当前实现的已知取舍，
+// 用 TestUploadFileAtExactLimitRejected 钉住，改动时该用例会失败提醒。
 const maxUploadBytes = 10 << 20
 
 // uploadResp 是 /upload 的响应体：客户端拿到 file_id 后，用它发 TypeFile 消息 + 拼下载链接。
@@ -66,6 +72,14 @@ func (gw *Gateway) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		// 超限和「缺字段」都会在这里报错，但含义完全不同：前者要告诉用户文件太大，
+		// 后者是请求格式不对。http.MaxBytesReader 触发时返回 *http.MaxBytesError，
+		// 用 errors.As 精确识别，别让用户对着「缺少 file 字段」猜自己哪里写错了。
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, fmt.Sprintf("文件过大：请求体上限 %d MiB", maxUploadBytes>>20), http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "缺少 file 字段或读取失败", http.StatusBadRequest)
 		return
 	}

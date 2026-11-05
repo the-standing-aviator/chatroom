@@ -191,8 +191,12 @@ func TestUploadOverSizeLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	gw.HandleUpload(rec, req)
 
-	if rec.Code == http.StatusOK {
-		t.Fatal("超限文件不该上传成功")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	// 错误信息必须点明「文件过大」，不能退化成「缺少 file 字段」让用户猜。
+	if body := rec.Body.String(); !strings.Contains(body, "文件过大") {
+		t.Fatalf("错误信息 = %q, 应包含「文件过大」", body)
 	}
 	// 超限时不该产生任何元数据（fakeStore 里应为空）
 	gw.store.(*fakeStore).mu.Lock()
@@ -207,8 +211,7 @@ func TestUploadOverSizeLimit(t *testing.T) {
 //
 // 注意 maxUploadBytes 的语义：它交给 http.MaxBytesReader，限制的是**整个 HTTP 请求体**，
 // 而不是文件字节数。multipart 有 boundary/头部开销（约 200 字节），所以文件本身必须
-// 比 maxUploadBytes 小一点才能通过。这是实现与注释（「单文件上传上限」）的一处偏差，
-// 见 TestUploadFileAtExactLimitRejected 的说明。
+// 比 maxUploadBytes 小一点才能通过。见 TestUploadFileAtExactLimitRejected 的说明。
 func TestUploadJustUnderLimit(t *testing.T) {
 	gw, am := newFileGateway(t)
 	tok := mustToken(t, am, "alice")
@@ -228,13 +231,13 @@ func TestUploadJustUnderLimit(t *testing.T) {
 	}
 }
 
-// TestUploadFileAtExactLimitRejected 记录一个已知偏差：文件字节数正好等于
+// TestUploadFileAtExactLimitRejected 记录一个已知取舍：文件字节数正好等于
 // maxUploadBytes 时会被拒绝，因为 MaxBytesReader 卡的是整个请求体，multipart 开销
 // 把总量顶过了上限。
 //
 // 这个用例的作用是把这个行为钉住——如果将来改成「按文件字节数限流」，它会失败，
-// 提醒同时更新注释与文档。当前不影响安全（只会更严格），但用户传正好 10 MiB 的
-// 文件会收到一条含义不清的「缺少 file 字段或读取失败」。
+// 提醒同时更新注释与文档。当前不影响安全（只会更严格），且用户能收到明确的
+// 413「文件过大」而不是含义不清的「缺少 file 字段」。
 func TestUploadFileAtExactLimitRejected(t *testing.T) {
 	gw, am := newFileGateway(t)
 	tok := mustToken(t, am, "alice")
@@ -251,6 +254,9 @@ func TestUploadFileAtExactLimitRejected(t *testing.T) {
 	if rec.Code == http.StatusOK {
 		t.Fatal("行为已变化：现在正好等于上限的文件也能上传了，" +
 			"请更新 maxUploadBytes 的注释（说明它限的是请求体还是文件字节）并删除本用例")
+	}
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413（超限应给明确状态码）", rec.Code)
 	}
 }
 
