@@ -49,12 +49,15 @@ func (s *Postgres) migrate(ctx context.Context) error {
 			created_at    TIMESTAMPTZ NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS messages (
-			id      BIGSERIAL PRIMARY KEY,
-			type    TEXT NOT NULL,
-			"from"  TEXT NOT NULL DEFAULT '',
-			"to"    TEXT NOT NULL DEFAULT '',
-			content TEXT NOT NULL DEFAULT '',
-			ts      TIMESTAMPTZ NOT NULL
+			id        BIGSERIAL PRIMARY KEY,
+			type      TEXT NOT NULL,
+			"from"    TEXT NOT NULL DEFAULT '',
+			"to"      TEXT NOT NULL DEFAULT '',
+			content   TEXT NOT NULL DEFAULT '',
+			file_id   TEXT NOT NULL DEFAULT '',
+			file_name TEXT NOT NULL DEFAULT '',
+			file_size BIGINT NOT NULL DEFAULT 0,
+			ts        TIMESTAMPTZ NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts)`,
 		`CREATE TABLE IF NOT EXISTS files (
@@ -66,6 +69,17 @@ func (s *Postgres) migrate(ctx context.Context) error {
 		)`,
 	}
 	for _, stmt := range stmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	// 迁移老库：与 SQLite 同理，CREATE TABLE IF NOT EXISTS 不会给已存在的 messages 表补新列，
+	// 用 ADD COLUMN IF NOT EXISTS 幂等补齐（新库建表已含列、老库在此补上）。
+	for _, stmt := range []string{
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_size BIGINT NOT NULL DEFAULT 0`,
+	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
@@ -100,8 +114,8 @@ func (s *Postgres) GetUser(name string) (User, error) {
 // SaveMessage 保存一条消息。
 func (s *Postgres) SaveMessage(m Message) error {
 	_, err := s.db.Exec(
-		`INSERT INTO messages (type, "from", "to", content, ts) VALUES ($1, $2, $3, $4, $5)`,
-		m.Type, m.From, m.To, m.Content, m.TS,
+		`INSERT INTO messages (type, "from", "to", content, file_id, file_name, file_size, ts) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		m.Type, m.From, m.To, m.Content, m.FileID, m.FileName, m.FileSize, m.TS,
 	)
 	return err
 }
@@ -112,7 +126,7 @@ func (s *Postgres) ListMessages(limit int) ([]Message, error) {
 		limit = 50
 	}
 	rows, err := s.db.Query(`
-		SELECT id, type, "from", "to", content, ts FROM (
+		SELECT id, type, "from", "to", content, file_id, file_name, file_size, ts FROM (
 			SELECT * FROM messages ORDER BY id DESC LIMIT $1
 		) ORDER BY id ASC`, limit)
 	if err != nil {
@@ -123,7 +137,7 @@ func (s *Postgres) ListMessages(limit int) ([]Message, error) {
 	var out []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Type, &m.From, &m.To, &m.Content, &m.TS); err != nil {
+		if err := rows.Scan(&m.ID, &m.Type, &m.From, &m.To, &m.Content, &m.FileID, &m.FileName, &m.FileSize, &m.TS); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

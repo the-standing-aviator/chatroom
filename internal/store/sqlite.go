@@ -41,12 +41,15 @@ CREATE TABLE IF NOT EXISTS users (
 	created_at    INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS messages (
-	id      INTEGER PRIMARY KEY AUTOINCREMENT,
-	type    TEXT NOT NULL,
-	"from"  TEXT NOT NULL DEFAULT '',
-	"to"    TEXT NOT NULL DEFAULT '',
-	content TEXT NOT NULL DEFAULT '',
-	ts      INTEGER NOT NULL
+	id        INTEGER PRIMARY KEY AUTOINCREMENT,
+	type      TEXT NOT NULL,
+	"from"    TEXT NOT NULL DEFAULT '',
+	"to"      TEXT NOT NULL DEFAULT '',
+	content   TEXT NOT NULL DEFAULT '',
+	file_id   TEXT NOT NULL DEFAULT '',
+	file_name TEXT NOT NULL DEFAULT '',
+	file_size INTEGER NOT NULL DEFAULT 0,
+	ts        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
 CREATE TABLE IF NOT EXISTS files (
@@ -57,8 +60,22 @@ CREATE TABLE IF NOT EXISTS files (
 	ts       INTEGER NOT NULL
 );
 `
-	_, err := s.db.ExecContext(ctx, schema)
-	return err
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	// 迁移老库：SQLite 的 CREATE TABLE IF NOT EXISTS 不会给已存在的 messages 表补新列，
+	// 逐个 ALTER；撞到「列已存在」就忽略，幂等（新库建表已含列、老库在此补上）。
+	for _, stmt := range []string{
+		`ALTER TABLE messages ADD COLUMN file_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE messages ADD COLUMN file_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE messages ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateUser 注册新用户，昵称重复返回 ErrConflict。
@@ -88,8 +105,8 @@ func (s *SQLite) GetUser(name string) (User, error) {
 // SaveMessage 保存一条消息。
 func (s *SQLite) SaveMessage(m Message) error {
 	_, err := s.db.Exec(
-		`INSERT INTO messages (type, "from", "to", content, ts) VALUES (?, ?, ?, ?, ?)`,
-		m.Type, m.From, m.To, m.Content, m.TS.Unix(),
+		`INSERT INTO messages (type, "from", "to", content, file_id, file_name, file_size, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.Type, m.From, m.To, m.Content, m.FileID, m.FileName, m.FileSize, m.TS.Unix(),
 	)
 	return err
 }
@@ -101,7 +118,7 @@ func (s *SQLite) ListMessages(limit int) ([]Message, error) {
 	}
 	// 先按 id 倒序取最近的 limit 条，再正序返回，保证时间从旧到新。
 	rows, err := s.db.Query(`
-		SELECT id, type, "from", "to", content, ts FROM (
+		SELECT id, type, "from", "to", content, file_id, file_name, file_size, ts FROM (
 			SELECT * FROM messages ORDER BY id DESC LIMIT ?
 		) ORDER BY id ASC`, limit)
 	if err != nil {
@@ -113,7 +130,7 @@ func (s *SQLite) ListMessages(limit int) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var ts int64
-		if err := rows.Scan(&m.ID, &m.Type, &m.From, &m.To, &m.Content, &ts); err != nil {
+		if err := rows.Scan(&m.ID, &m.Type, &m.From, &m.To, &m.Content, &m.FileID, &m.FileName, &m.FileSize, &ts); err != nil {
 			return nil, err
 		}
 		m.TS = time.Unix(ts, 0)

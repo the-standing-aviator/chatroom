@@ -80,6 +80,13 @@ func (gw *Gateway) route(s *Session, m protocol.Message) {
 		}
 		gw.broadcast(s.Name(), m.Content)
 
+	case protocol.TypeFile:
+		if m.FileID == "" || m.FileName == "" {
+			s.send(protocol.Message{Type: protocol.TypeError, Error: "文件消息缺少 file_id 或 file_name"})
+			return
+		}
+		gw.broadcastFile(s.Name(), m.FileID, m.FileName, m.FileSize)
+
 	case protocol.TypePrivate:
 		if m.To == "" || m.Content == "" {
 			s.send(protocol.Message{Type: protocol.TypeError, Error: "私聊需要指定对象和内容"})
@@ -129,11 +136,14 @@ func storeToProto(msgs []store.Message) []*protocol.Message {
 	out := make([]*protocol.Message, 0, len(msgs))
 	for _, m := range msgs {
 		out = append(out, &protocol.Message{
-			Type:    m.Type,
-			From:    m.From,
-			To:      m.To,
-			Content: m.Content,
-			TS:      m.TS.Unix(),
+			Type:     m.Type,
+			From:     m.From,
+			To:       m.To,
+			Content:  m.Content,
+			FileID:   m.FileID,
+			FileName: m.FileName,
+			FileSize: m.FileSize,
+			TS:       m.TS.Unix(),
 		})
 	}
 	return out

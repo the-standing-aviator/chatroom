@@ -208,6 +208,17 @@ func (gw *Gateway) broadcast(from, content string) {
 	gw.enqueue(store.Message{Type: "chat", From: from, Content: content, TS: time.Unix(ts, 0)})
 }
 
+// broadcastFile 广播一条文件消息：只传元数据，文件字节已由上传接口（/upload）落盘。
+// 与 broadcast 同构：走总线扇出到所有在线用户 + 异步持久化，type 用 file 区分。
+func (gw *Gateway) broadcastFile(from, fileID, fileName string, fileSize int64) {
+	ts := time.Now().Unix()
+	m := protocol.Message{Type: protocol.TypeFile, From: from, FileID: fileID, FileName: fileName, FileSize: fileSize, TS: ts}
+	if err := gw.bus.Publish(subjectBroadcast, m); err != nil {
+		gw.log.Error("publish file broadcast failed", zap.Error(err))
+	}
+	gw.enqueue(store.Message{Type: "file", From: from, FileID: fileID, FileName: fileName, FileSize: fileSize, TS: time.Unix(ts, 0)})
+}
+
 // broadcastSystem 广播一条系统提示（上下线、改名等，不持久化）。
 // 走总线（subjectSystem），handler 用 sendSystem 独立通道投递：系统消息尽力而为，
 // 不挤占业务消息的 sendCh（见 P2-3）。

@@ -18,12 +18,15 @@ type User struct {
 
 // Message 表示一条需要持久化的消息。
 type Message struct {
-	ID      int64
-	Type    string // chat / private / file
-	From    string
-	To      string // 私聊目标，公聊为空
-	Content string
-	TS      time.Time
+	ID       int64
+	Type     string // chat / private / file
+	From     string
+	To       string // 私聊目标，公聊为空
+	Content  string
+	FileID   string // 文件消息：文件 id（即存储/下载 key），普通消息为空
+	FileName string // 文件消息：原始文件名
+	FileSize int64  // 文件消息：字节数
+	TS       time.Time
 }
 
 // File 表示一个已上传文件的元数据（文件字节单独存，见 internal/storage）。

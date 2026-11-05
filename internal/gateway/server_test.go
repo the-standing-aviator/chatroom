@@ -26,10 +26,11 @@ type fakeStore struct {
 	mu    sync.Mutex
 	users map[string]store.User
 	msgs  []store.Message
+	files map[string]store.File
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{users: make(map[string]store.User)}
+	return &fakeStore{users: make(map[string]store.User), files: make(map[string]store.File)}
 }
 
 func (f *fakeStore) CreateUser(name, hash string) error {
@@ -66,6 +67,23 @@ func (f *fakeStore) ListMessages(limit int) ([]store.Message, error) {
 		limit = len(f.msgs)
 	}
 	return append([]store.Message(nil), f.msgs[len(f.msgs)-limit:]...), nil
+}
+
+func (f *fakeStore) SaveFile(fi store.File) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.files[fi.ID] = fi
+	return nil
+}
+
+func (f *fakeStore) GetFile(id string) (store.File, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fi, ok := f.files[id]
+	if !ok {
+		return store.File{}, store.ErrNotFound
+	}
+	return fi, nil
 }
 
 func (f *fakeStore) Close() error { return nil }
@@ -304,6 +322,8 @@ func TestRouteRejectsBadInput(t *testing.T) {
 		{name: "private缺对象", in: protocol.Message{Type: protocol.TypePrivate, Content: "hi"}, want: "私聊需要指定对象和内容"},
 		{name: "private缺内容", in: protocol.Message{Type: protocol.TypePrivate, To: "bob"}, want: "私聊需要指定对象和内容"},
 		{name: "rename空昵称", in: protocol.Message{Type: protocol.TypeRename}, want: "昵称不能为空"},
+		{name: "file缺id", in: protocol.Message{Type: protocol.TypeFile, FileName: "a.txt"}, want: "文件消息缺少 file_id 或 file_name"},
+		{name: "file缺name", in: protocol.Message{Type: protocol.TypeFile, FileID: "0123456789abcdef0123456789abcdef"}, want: "文件消息缺少 file_id 或 file_name"},
 	}
 
 	for _, tc := range cases {
@@ -388,6 +408,51 @@ func TestPrivateMessage(t *testing.T) {
 	resp := readFrame(t, connB)
 	if resp.Type != protocol.TypePrivate || resp.From != "alice" || resp.Content != "hello bob" {
 		t.Fatalf("bob 收到的私聊 = %+v", resp)
+	}
+}
+
+// TestFileMessageBroadcast 验证文件消息广播：alice 发文件元数据（file_id/file_name/file_size），
+// 在线用户都能收到同一条 file 消息；文件字节本身走 HTTP 上传通道，不经过聊天帧。
+func TestFileMessageBroadcast(t *testing.T) {
+	gw := NewGateway("test-node", ":0", zap.NewNop(), newFakeStore(), presence.NewMemory(), auth.New("test-secret", time.Hour), bus.NewMemory())
+
+	connA := startClient(t, gw)
+	login(t, connA, "alice", "secret")
+
+	connB := startClient(t, gw)
+	login(t, connB, "bob", "secret")
+
+	// alice 先收到 "bob 已上线" 广播，读掉
+	if m := readFrame(t, connA); m.Type != protocol.TypeSystem || m.Content != "bob 已上线" {
+		t.Fatalf("alice 应收到 bob 上线广播，实际 %+v", m)
+	}
+
+	const (
+		fileID   = "0123456789abcdef0123456789abcdef"
+		fileName = "report.pdf"
+		fileSize = int64(2048)
+	)
+
+	// alice 发文件消息
+	writeFrame(t, connA, protocol.Message{
+		Type:     protocol.TypeFile,
+		FileID:   fileID,
+		FileName: fileName,
+		FileSize: fileSize,
+	})
+
+	// alice 收到自己的广播回显
+	echo := readFrame(t, connA)
+	if echo.Type != protocol.TypeFile || echo.From != "alice" ||
+		echo.FileID != fileID || echo.FileName != fileName || echo.FileSize != fileSize {
+		t.Fatalf("alice 收到的文件广播 = %+v", echo)
+	}
+
+	// bob 也收到同一份文件元数据
+	got := readFrame(t, connB)
+	if got.Type != protocol.TypeFile || got.From != "alice" ||
+		got.FileID != fileID || got.FileName != fileName || got.FileSize != fileSize {
+		t.Fatalf("bob 收到的文件广播 = %+v", got)
 	}
 }
 

@@ -96,3 +96,45 @@ func TestListMessagesEmpty(t *testing.T) {
 		t.Fatalf("len = %d, want 0", len(msgs))
 	}
 }
+
+// TestMessageFileFieldsRoundTrip 验证文件消息三个字段（file_id/file_name/file_size）
+// 能正确落盘并读回：普通消息这三列留零值，文件消息保留原始值。
+func TestMessageFileFieldsRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+
+	// 普通公聊：文件三列应为零值
+	if err := st.SaveMessage(Message{Type: "chat", From: "alice", Content: "hi", TS: time.Now()}); err != nil {
+		t.Fatalf("SaveMessage(chat): %v", err)
+	}
+
+	// 文件消息：三列带值
+	fileMsg := Message{
+		Type:     "file",
+		From:     "alice",
+		FileID:   "0123456789abcdef0123456789abcdef",
+		FileName: "report.pdf",
+		FileSize: 2048,
+		TS:       time.Now(),
+	}
+	if err := st.SaveMessage(fileMsg); err != nil {
+		t.Fatalf("SaveMessage(file): %v", err)
+	}
+
+	msgs, err := st.ListMessages(10)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len = %d, want 2", len(msgs))
+	}
+
+	// 第一条是普通消息，文件字段应为零值
+	if msgs[0].FileID != "" || msgs[0].FileName != "" || msgs[0].FileSize != 0 {
+		t.Fatalf("普通消息文件字段应为零值，实际 %+v", msgs[0])
+	}
+	// 第二条是文件消息，字段应完整保留
+	if msgs[1].Type != "file" || msgs[1].FileID != fileMsg.FileID ||
+		msgs[1].FileName != fileMsg.FileName || msgs[1].FileSize != fileMsg.FileSize {
+		t.Fatalf("文件消息字段 = %+v，期望 %+v", msgs[1], fileMsg)
+	}
+}

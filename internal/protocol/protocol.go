@@ -32,6 +32,12 @@ type Message struct {
 	To      string `json:"to,omitempty"`
 	Content string `json:"content,omitempty"`
 
+	// 文件消息（file）：只传元数据（file_id/file_name/file_size），
+	// 文件字节走独立 HTTP 通道（/upload、/download），不进聊天帧（帧上限 MaxFrameSize=64KB）。
+	FileID   string `json:"file_id,omitempty"`
+	FileName string `json:"file_name,omitempty"`
+	FileSize int64  `json:"file_size,omitempty"`
+
 	// 时间戳，Unix 秒
 	TS int64 `json:"ts,omitempty"`
 
@@ -54,6 +60,7 @@ const (
 	TypeAuth      = "auth"       // 登录/注册：Name + Password
 	TypeAuthToken = "auth_token" // 免密重连：Token（身份以 token 的 sub 为准）
 	TypeChat      = "chat"       // 公聊：Content
+	TypeFile      = "file"       // 文件消息：FileID + FileName + FileSize（字节走 HTTP）
 	TypePrivate   = "private"    // 私聊：To + Content
 	TypeRename    = "rename"     // 改名：NewName
 	TypeWho       = "who"        // 查看在线列表
