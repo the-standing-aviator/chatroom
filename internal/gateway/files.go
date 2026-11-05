@@ -105,8 +105,18 @@ func (gw *Gateway) HandleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleDownload 处理 GET /download/{id}：查元数据 → 打开字节流 → 带原始文件名回放。
-// 下载免鉴权（V4 简化）：file_id 是 32 位随机 hex，不可猜，等价能力 URL；
-// 后续若要收紧可要求携带 JWT 或做成限时签名链接。
+//
+// 下载**有意免鉴权**（能力 URL 模型）：file_id 是 32 位随机 hex，不可猜；
+// 拿到链接的人即可下载。这是一个产品决策而非待办——私聊的接收方应当能把文件
+// 转发给别人（类似网盘分享链接）。
+//
+// 「私聊文件的隐私」由消息投递保证：文件消息本身只发给私聊双方，不广播、不进
+// 他人历史（见 privateFile 与 ListMessages 的可见性过滤）。链接一旦被接收方
+// 主动转发出去，则视为其有意分享。
+//
+// 若将来要收紧成「仅双方可下」，改动点在这里：校验 JWT 并比对 files.uploader
+// 与 messages 中该 file_id 的 to 字段；同时前端下载要改成 fetch + blob，
+// 因为 <a href> 无法携带 Authorization 头。
 func (gw *Gateway) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

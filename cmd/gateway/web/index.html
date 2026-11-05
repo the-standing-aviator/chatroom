@@ -493,7 +493,17 @@
       }
       const data = await res.json();
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'file', file_id: data.file_id, file_name: data.file_name, file_size: data.file_size }));
+        // 私聊模式下带上 to：服务端只投递给对方，不广播给所有人。
+        // 不带 to 就是公聊文件，在线所有人都能看到。
+        const msg = { type: 'file', file_id: data.file_id, file_name: data.file_name, file_size: data.file_size };
+        if (privateTo) {
+          msg.to = privateTo;
+          ws.send(JSON.stringify(msg));
+          // 后端私聊只投递给对方、不回显给发送者（与私聊文本一致），本地补一行。
+          addFileLine(myName, data.file_name, data.file_size, data.file_id, Math.floor(Date.now() / 1000));
+        } else {
+          ws.send(JSON.stringify(msg));
+        }
       }
     } catch (e) {
       addLine('error', '上传失败，请重试', '', Math.floor(Date.now() / 1000), '');

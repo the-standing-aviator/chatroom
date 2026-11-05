@@ -85,6 +85,17 @@ func (gw *Gateway) route(s *Session, m protocol.Message) {
 			s.send(protocol.Message{Type: protocol.TypeError, Error: "文件消息缺少 file_id 或 file_name"})
 			return
 		}
+		// 带 To 的是私聊文件：只投递给目标用户，不进公聊广播。
+		if m.To != "" {
+			if m.To == s.Name() {
+				s.send(protocol.Message{Type: protocol.TypeError, Error: "不能给自己发私聊文件"})
+				return
+			}
+			if !gw.privateFile(s.Name(), m.To, m.FileID, m.FileName, m.FileSize) {
+				s.send(protocol.Message{Type: protocol.TypeError, Error: "用户 " + m.To + " 不存在或不在线"})
+			}
+			return
+		}
 		gw.broadcastFile(s.Name(), m.FileID, m.FileName, m.FileSize)
 
 	case protocol.TypePrivate:

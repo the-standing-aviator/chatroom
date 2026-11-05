@@ -211,7 +211,7 @@ func (gw *Gateway) broadcast(from, content string) {
 	gw.enqueue(store.Message{Type: "chat", From: from, Content: content, TS: time.Unix(ts, 0)})
 }
 
-// broadcastFile 广播一条文件消息：只传元数据，文件字节已由上传接口（/upload）落盘。
+// broadcastFile 广播一条公聊文件消息：只传元数据，文件字节已由上传接口（/upload）落盘。
 // 与 broadcast 同构：走总线扇出到所有在线用户 + 异步持久化，type 用 file 区分。
 func (gw *Gateway) broadcastFile(from, fileID, fileName string, fileSize int64) {
 	ts := time.Now().Unix()
@@ -220,6 +220,32 @@ func (gw *Gateway) broadcastFile(from, fileID, fileName string, fileSize int64) 
 		gw.log.Error("publish file broadcast failed", zap.Error(err))
 	}
 	gw.enqueue(store.Message{Type: "file", From: from, FileID: fileID, FileName: fileName, FileSize: fileSize, TS: time.Unix(ts, 0)})
+}
+
+// privateFile 把一条文件消息定向发给 to（私聊文件）。
+//
+// 与 private 同构：查在线登记表定位目标节点 → 经总线定向投递 → 持久化（带 To）。
+// 持久化时记 To 很关键：历史接口按 To 过滤，否则这条文件消息会泄漏给所有拉历史的人。
+//
+// 注意下载链接本身仍是免鉴权的能力 URL（见 HandleDownload 的说明）——这是有意的
+// 设计：接收方应当能把文件转发给他人。这里只保证「消息不广播给无关的人」。
+func (gw *Gateway) privateFile(from, to, fileID, fileName string, fileSize int64) bool {
+	node, err := gw.presence.Node(to)
+	if err != nil {
+		if !errors.Is(err, presence.ErrNotFound) {
+			gw.log.Error("presence node failed", zap.Error(err))
+		}
+		return false
+	}
+
+	ts := time.Now().Unix()
+	m := protocol.Message{Type: protocol.TypeFile, From: from, To: to, FileID: fileID, FileName: fileName, FileSize: fileSize, TS: ts}
+	if err := gw.bus.Publish(subjectNode+node, m); err != nil {
+		gw.log.Error("publish private file failed", zap.Error(err))
+		return false
+	}
+	gw.enqueue(store.Message{Type: "file", From: from, To: to, FileID: fileID, FileName: fileName, FileSize: fileSize, TS: time.Unix(ts, 0)})
+	return true
 }
 
 // broadcastSystem 广播一条系统提示（上下线、改名等，不持久化）。
