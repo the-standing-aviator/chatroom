@@ -57,11 +57,16 @@
   .line.system .body { color: var(--sys); }
   .line.error .body { color: var(--err); }
   .line.private .body { color: var(--private); }
+  .line.file .file-link { color: var(--accent); text-decoration: none; }
+  .line.file .file-link:hover { text-decoration: underline; }
   #composer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); }
   #input { flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 14px; outline: none; }
   #input:focus { border-color: var(--accent); }
   #send { padding: 10px 18px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; cursor: pointer; }
   #send:disabled { opacity: .5; cursor: not-allowed; }
+  #file-btn { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 14px; cursor: pointer; }
+  #file-btn:disabled { opacity: .5; cursor: not-allowed; }
+  #file-btn:hover:not(:disabled) { border-color: var(--accent); }
   #mode-bar { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-top: 1px solid var(--border); background: var(--panel); font-size: 13px; color: var(--private); }
   #mode-bar.hidden { display: none; }
   #mode-bar button { padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; }
@@ -105,6 +110,8 @@
         <form id="composer">
           <input id="input" autocomplete="off" placeholder="说点什么…" disabled>
           <button id="send" disabled>发送</button>
+          <button id="file-btn" type="button" disabled title="发送文件">📎</button>
+          <input id="file-input" type="file" hidden>
         </form>
       </section>
     </div>
@@ -143,6 +150,8 @@
   const renameInput = $('rename-input');
   const renameOk = $('rename-ok');
   const renameCancel = $('rename-cancel');
+  const fileBtn = $('file-btn');
+  const fileInput = $('file-input');
 
   let ws = null;
   let privateTo = null;
@@ -241,6 +250,9 @@
       case 'history':
         renderHistory(m.messages || []);
         break;
+      case 'file':
+        addFileLine(m.from, m.file_name, m.file_size, m.file_id, m.ts);
+        break;
       case 'pong':
         break;
       default:
@@ -276,6 +288,39 @@
 
     log.appendChild(line);
     log.scrollTop = log.scrollHeight;
+  }
+
+  function addFileLine(from, fileName, fileSize, fileID, ts) {
+    const line = document.createElement('div');
+    line.className = 'line file';
+
+    const time = document.createElement('span');
+    time.className = 'time';
+    time.textContent = fmtTime(ts);
+    line.appendChild(time);
+
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = from + ': ';
+    line.appendChild(who);
+
+    // 用 DOM API 建链接（href/textContent 都是安全赋值，不走 innerHTML，防 XSS），
+    // href 指向 /download/{id}，download 属性建议浏览器用原文件名保存。
+    const link = document.createElement('a');
+    link.className = 'file-link';
+    link.href = '/download/' + fileID;
+    link.download = fileName;
+    link.textContent = '📄 ' + fileName + ' (' + fmtSize(fileSize) + ')';
+    line.appendChild(link);
+
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function fmtSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
   function fmtTime(ts) {
@@ -360,6 +405,7 @@
     for (const msg of messages) {
       if (msg.type === 'chat') addLine('chat', msg.content, msg.from, msg.ts, '');
       else if (msg.type === 'private') addLine('private', msg.content, msg.from, msg.ts, msg.to);
+      else if (msg.type === 'file') addFileLine(msg.from, msg.file_name, msg.file_size, msg.file_id, msg.ts);
     }
   }
   function startWhoTimer() { stopWhoTimer(); whoTimer = setInterval(requestWho, 30000); }
@@ -376,6 +422,7 @@
   function enableComposer(on) {
     input.disabled = !on;
     sendBtn.disabled = !on;
+    fileBtn.disabled = !on;
     renameBtn.classList.toggle('hidden', !on);
     if (!on) renameBox.classList.add('hidden');
     if (on) input.focus();
@@ -417,6 +464,41 @@
     input.value = '';
     input.focus();
   };
+
+  // 文件上传：先 POST /upload（带 JWT）存字节，拿到 file_id 后再发 WS 的 file 消息广播元数据。
+  // 两步与后端一致（HTTP 走字节、WS 走聊天）；广播会回显给所有在线用户（含自己），无需本地回显。
+  fileBtn.onclick = () => fileInput.click();
+  fileInput.onchange = () => {
+    if (fileInput.files && fileInput.files[0]) uploadFile(fileInput.files[0]);
+  };
+  async function uploadFile(file) {
+    const token = localStorage.getItem('communicate_token');
+    if (!token || !ws || ws.readyState !== WebSocket.OPEN) {
+      addLine('error', '请先登录后再发文件', '', Math.floor(Date.now() / 1000), '');
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('/upload', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: fd,
+      });
+      if (!res.ok) {
+        addLine('error', '上传失败（' + res.status + '）', '', Math.floor(Date.now() / 1000), '');
+        return;
+      }
+      const data = await res.json();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'file', file_id: data.file_id, file_name: data.file_name, file_size: data.file_size }));
+      }
+    } catch (e) {
+      addLine('error', '上传失败，请重试', '', Math.floor(Date.now() / 1000), '');
+    } finally {
+      fileInput.value = ''; // 清空，允许下次再选同一个文件
+    }
+  }
 
   connect();
 </script>
