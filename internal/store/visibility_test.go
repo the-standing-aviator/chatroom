@@ -127,3 +127,81 @@ func assertLimitAppliesAfterVisibilityFilter(t *testing.T, st Store) {
 		}
 	}
 }
+
+// assertListMessagesBefore 验证「上滑加载更早」的分页契约：只返回指定会话、
+// id < beforeID 的消息，按 id 升序，且私聊不泄漏给无关方。
+func assertListMessagesBefore(t *testing.T, st Store) {
+	t.Helper()
+
+	save := func(typ, from, to, content string) {
+		t.Helper()
+		if err := st.SaveMessage(Message{Type: typ, From: from, To: to, Content: content, TS: time.Now()}); err != nil {
+			t.Fatalf("SaveMessage(%s): %v", content, err)
+		}
+	}
+	// 保存顺序即 id 顺序：公聊 4 条 + alice↔bob 2 条 + alice↔carol 1 条
+	save("chat", "alice", "", "p1")
+	save("chat", "alice", "", "p2")
+	save("chat", "alice", "", "p3")
+	save("chat", "alice", "", "p4")
+	save("private", "alice", "bob", "ab1")
+	save("private", "bob", "alice", "ab2")
+	save("private", "alice", "carol", "ac1")
+
+	// 用 ListMessages 反查 content→id，避免依赖自增序列从 1 开始
+	all, err := st.ListMessages("alice", 100)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	idOf := map[string]int64{}
+	for _, m := range all {
+		idOf[m.Content] = m.ID
+	}
+
+	// 公聊分页：beforeID = p4 的 id，应只返回 p1..p3，且升序
+	pub, err := st.ListMessagesBefore("alice", "", idOf["p4"], 10)
+	if err != nil {
+		t.Fatalf("ListMessagesBefore(public): %v", err)
+	}
+	if got, want := contentsOf(pub), []string{"p1", "p2", "p3"}; !strSlicesEqual(got, want) {
+		t.Fatalf("public before p4 = %v, want %v", got, want)
+	}
+
+	// 私聊：alice 拉 bob 会话，只返回 ab1、ab2（升序）
+	ab, err := st.ListMessagesBefore("alice", "bob", 1<<30, 10)
+	if err != nil {
+		t.Fatalf("ListMessagesBefore(alice,bob): %v", err)
+	}
+	if got, want := contentsOf(ab), []string{"ab1", "ab2"}; !strSlicesEqual(got, want) {
+		t.Fatalf("alice↔bob = %v, want %v", got, want)
+	}
+
+	// 隐私：carol 拉 bob 会话应一无所获（两者之间没有双向私聊）
+	cb, err := st.ListMessagesBefore("carol", "bob", 1<<30, 10)
+	if err != nil {
+		t.Fatalf("ListMessagesBefore(carol,bob): %v", err)
+	}
+	if len(cb) != 0 {
+		t.Fatalf("carol 拉 bob 会话 = %v, want 空（私聊泄漏）", contentsOf(cb))
+	}
+}
+
+func contentsOf(msgs []Message) []string {
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.Content
+	}
+	return out
+}
+
+func strSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -57,6 +57,12 @@ type Store interface {
 	// viewer 是发起查询的用户昵称，用于过滤私聊：公聊（To 为空）所有人可见，
 	// 私聊只有收发双方可见。不传 viewer 就等于把所有人的私聊泄漏给每个请求方。
 	ListMessages(viewer string, limit int) ([]Message, error)
+	// ListMessagesBefore 返回 viewer 在指定会话中、id 小于 beforeID 的最近 limit 条消息，
+	// 按 id 升序（最旧在前）。peer 为空表示公聊，否则表示与 peer 的双向私聊。
+	//
+	// 用于「上滑加载更早历史」的分页游标：beforeID 传当前已加载的最早消息 id，
+	// 这样同一秒多条消息、以及跨会话混合查询都不会漏或重（id 单调递增）。
+	ListMessagesBefore(viewer, peer string, beforeID int64, limit int) ([]Message, error)
 	// SaveFile 保存文件元数据。
 	SaveFile(f File) error
 	// GetFile 按 id 查询文件元数据，不存在返回 ErrNotFound。

@@ -41,6 +41,9 @@ type Message struct {
 	// 时间戳，Unix 秒
 	TS int64 `json:"ts,omitempty"`
 
+	// 消息 id（仅 history 响应携带，用于前端「上滑加载更早」的分页游标）
+	ID int64 `json:"id,omitempty"`
+
 	// 改名（rename）
 	NewName string `json:"new_name,omitempty"`
 
@@ -49,6 +52,8 @@ type Message struct {
 
 	// 历史消息（history）
 	Limit    int        `json:"limit,omitempty"`
+	Peer     string     `json:"peer,omitempty"`      // 指定会话：空=公聊，否则=私聊对象昵称
+	BeforeID int64      `json:"before_id,omitempty"` // 分页游标：0=取最新，>0=取 id 更早的消息
 	Messages []*Message `json:"messages,omitempty"`
 
 	// 错误提示（error）

@@ -76,6 +76,29 @@ func (f *fakeStore) ListMessages(viewer string, limit int) ([]store.Message, err
 	return append([]store.Message(nil), visible[len(visible)-limit:]...), nil
 }
 
+func (f *fakeStore) ListMessagesBefore(viewer, peer string, beforeID int64, limit int) ([]store.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	visible := make([]store.Message, 0, len(f.msgs))
+	for _, m := range f.msgs {
+		if peer == "" {
+			if m.To != "" {
+				continue
+			}
+		} else if !((m.From == viewer && m.To == peer) || (m.From == peer && m.To == viewer)) {
+			continue
+		}
+		if beforeID > 0 && m.ID >= beforeID {
+			continue
+		}
+		visible = append(visible, m)
+	}
+	if limit <= 0 || limit > len(visible) {
+		limit = len(visible)
+	}
+	return append([]store.Message(nil), visible[len(visible)-limit:]...), nil
+}
+
 func (f *fakeStore) SaveFile(fi store.File) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

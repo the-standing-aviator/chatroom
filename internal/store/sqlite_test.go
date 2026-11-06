@@ -148,3 +148,8 @@ func TestSQLitePrivateMessageVisibility(t *testing.T) {
 func TestSQLiteLimitAfterVisibilityFilter(t *testing.T) {
 	assertLimitAppliesAfterVisibilityFilter(t, newTestStore(t))
 }
+
+// TestSQLiteListMessagesBefore 验证「上滑加载更早」分页（SQLite 实现）。
+func TestSQLiteListMessagesBefore(t *testing.T) {
+	assertListMessagesBefore(t, newTestStore(t))
+}

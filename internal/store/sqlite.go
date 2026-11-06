@@ -145,6 +145,47 @@ func (s *SQLite) ListMessages(viewer string, limit int) ([]Message, error) {
 	return out, rows.Err()
 }
 
+// ListMessagesBefore 返回 viewer 在指定会话中、id 小于 beforeID 的最近 limit 条消息，
+// 按 id 升序。peer 为空=公聊（to=''），否则=与 peer 的双向私聊。
+func (s *SQLite) ListMessagesBefore(viewer, peer string, beforeID int64, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	var rows *sql.Rows
+	var err error
+	if peer == "" {
+		rows, err = s.db.Query(`
+			SELECT id, type, "from", "to", content, file_id, file_name, file_size, ts FROM (
+				SELECT * FROM messages
+				WHERE "to" = '' AND id < ?
+				ORDER BY id DESC LIMIT ?
+			) ORDER BY id ASC`, beforeID, limit)
+	} else {
+		rows, err = s.db.Query(`
+			SELECT id, type, "from", "to", content, file_id, file_name, file_size, ts FROM (
+				SELECT * FROM messages
+				WHERE (( "from" = ? AND "to" = ? ) OR ( "from" = ? AND "to" = ? )) AND id < ?
+				ORDER BY id DESC LIMIT ?
+			) ORDER BY id ASC`, viewer, peer, peer, viewer, beforeID, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Message
+	for rows.Next() {
+		var m Message
+		var ts int64
+		if err := rows.Scan(&m.ID, &m.Type, &m.From, &m.To, &m.Content, &m.FileID, &m.FileName, &m.FileSize, &ts); err != nil {
+			return nil, err
+		}
+		m.TS = time.Unix(ts, 0)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // SaveFile 保存文件元数据。
 func (s *SQLite) SaveFile(f File) error {
 	_, err := s.db.Exec(

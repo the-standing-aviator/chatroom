@@ -159,3 +159,8 @@ func TestPostgresPrivateMessageVisibility(t *testing.T) {
 func TestPostgresLimitAfterVisibilityFilter(t *testing.T) {
 	assertLimitAppliesAfterVisibilityFilter(t, newTestPostgres(t))
 }
+
+// TestPostgresListMessagesBefore 验证「上滑加载更早」分页（PostgreSQL 实现，无 PG 环境自动 skip）。
+func TestPostgresListMessagesBefore(t *testing.T) {
+	assertListMessagesBefore(t, newTestPostgres(t))
+}

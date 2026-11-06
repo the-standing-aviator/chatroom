@@ -422,6 +422,12 @@
   let activeConv = 'public';
   let onlineUsers = [];
 
+  // 上滑分页：convHasMore 标记每个会话是否还有更早历史没加载；
+  // loadingOlder 记录正在请求中的会话 key（防滚动重复触发）。
+  const convHasMore = new Map();
+  const loadingOlder = new Set();
+  const PAGE = 30; // 上滑每次拉取的历史条数
+
   // 头像配色：按昵称哈希取固定色，保证同一个人颜色始终一致。
   const AVATAR_COLORS = [
     'linear-gradient(135deg,#5b8cff,#7b6bff)',
@@ -449,7 +455,7 @@
 
   // ---- 会话管理 ----
   function ensureConv(key) {
-    if (!convs.has(key)) convs.set(key, []);
+    if (!convs.has(key)) { convs.set(key, []); convHasMore.set(key, false); }
     return convs.get(key);
   }
   // 消息归属哪个会话：公聊/系统 → 'public'；私聊 → 对方昵称。
@@ -802,37 +808,88 @@
         renderUsers(m.users || []);
         break;
 
-      case 'history':
-        renderHistory(m.messages || []);
+      case 'history': {
+        const msgs = m.messages || [];
+        if (m.before_id > 0) {
+          // 上滑分页响应：后端回显 peer 指明会话，把更早一页前插到对应会话。
+          const key = m.peer || 'public';
+          loadingOlder.delete(key);
+          prependOlder(key, msgs.map(histItem).filter(Boolean));
+          if (msgs.length < PAGE) convHasMore.set(key, false); // 不足一页 = 没有更早了
+        } else {
+          renderHistory(msgs);
+        }
         break;
+      }
 
       case 'pong':
         break;
     }
   }
 
+  // 协议消息 → 会话内消息项。带 id（供上滑分页游标）；未知类型返回 null。
+  function histItem(msg) {
+    if (msg.type === 'chat') {
+      return { id: msg.id, kind: 'chat', text: msg.content, from: msg.from, ts: msg.ts };
+    }
+    if (msg.type === 'private') {
+      return { id: msg.id, kind: 'private', text: msg.content, from: msg.from, to: msg.to, ts: msg.ts };
+    }
+    if (msg.type === 'file') {
+      return {
+        id: msg.id,
+        kind: msg.to ? 'private' : 'chat',
+        from: msg.from, to: msg.to, ts: msg.ts,
+        file: { id: msg.file_id, name: msg.file_name, size: msg.file_size },
+      };
+    }
+    return null;
+  }
+
   // 历史消息按会话分流：公聊进 'public'，私聊进与对方的会话。
   // 后端已按 viewer 过滤（只返回公聊 + 与我相关的私聊），这里只需归类。
   function renderHistory(messages) {
     for (const msg of messages) {
-      let item;
-      if (msg.type === 'chat') {
-        item = { kind: 'chat', text: msg.content, from: msg.from, ts: msg.ts };
-      } else if (msg.type === 'private') {
-        item = { kind: 'private', text: msg.content, from: msg.from, to: msg.to, ts: msg.ts };
-      } else if (msg.type === 'file') {
-        item = {
-          kind: msg.to ? 'private' : 'chat',
-          from: msg.from, to: msg.to, ts: msg.ts,
-          file: { id: msg.file_id, name: msg.file_name, size: msg.file_size },
-        };
-      } else {
-        continue;
-      }
-      ensureConv(convKeyOf(item)).push(item);
+      const item = histItem(msg);
+      if (!item) continue;
+      const key = convKeyOf(item);
+      ensureConv(key).push(item);
+      convHasMore.set(key, true); // 有历史消息的会话，可能还有更早的
     }
     renderConvList();
     renderConv();
+  }
+
+  // 上滑加载更早历史：取当前会话最早一条「带 id 的历史消息」的 id 作游标。
+  // 系统提示 / 实时消息没有 id，不能当游标，跳过它们找第一条历史消息。
+  function loadOlder(key) {
+    const arr = convs.get(key);
+    if (!arr) { convHasMore.set(key, false); return; }
+    let oldest = null;
+    for (const m of arr) {
+      if (typeof m.id === 'number') { oldest = m; break; }
+    }
+    if (!oldest) { convHasMore.set(key, false); return; }
+    if (loadingOlder.has(key)) return;
+    loadingOlder.add(key);
+    ws.send(JSON.stringify({ type: 'history', peer: key === 'public' ? '' : key, before_id: oldest.id, limit: PAGE }));
+  }
+
+  // 把更早一页前插到会话顶部，并保持滚动位置不跳动（只对当前会话改 DOM）。
+  function prependOlder(key, items) {
+    if (items.length === 0) { convHasMore.set(key, false); return; }
+    const arr = convs.get(key);
+    if (!arr) return;
+    arr.unshift(...items);
+    if (key !== activeConv) return;
+    const oldHeight = log.scrollHeight;
+    const oldTop = log.scrollTop;
+    const frag = document.createDocumentFragment();
+    for (const it of items) frag.appendChild(buildMsgNode(it));
+    const emptyTip = log.querySelector('#empty-tip');
+    if (emptyTip) emptyTip.remove();
+    log.insertBefore(frag, log.firstChild);
+    log.scrollTop = log.scrollHeight - oldHeight + oldTop;
   }
 
   function requestWho() {
@@ -1036,6 +1093,15 @@
   }
 
   function nowSec() { return Math.floor(Date.now() / 1000); }
+
+  // 上滑加载更早历史：滚到接近顶部时，为当前会话加载更早一页。
+  log.addEventListener('scroll', () => {
+    if (log.scrollHeight <= log.clientHeight) return; // 内容不足一屏，无可上滑
+    if (log.scrollTop > 40) return;                   // 还没滚到顶部
+    const key = activeConv;
+    if (!convHasMore.get(key) || loadingOlder.has(key)) return;
+    loadOlder(key);
+  });
 
   // ---- 启动 ----
   myName = localStorage.getItem('communicate_name') || '';

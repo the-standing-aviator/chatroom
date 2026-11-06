@@ -127,13 +127,22 @@ func (gw *Gateway) route(s *Session, m protocol.Message) {
 
 	case protocol.TypeHistory:
 		// 按 s.Name() 过滤：只返回公聊 + 与自己相关的私聊，防止私聊内容泄漏给第三方。
-		msgs, err := gw.store.ListMessages(s.Name(), m.Limit)
+		// BeforeID > 0 表示「上滑加载更早」的分页请求：按指定会话（Peer）取更早消息。
+		var msgs []store.Message
+		var err error
+		if m.BeforeID > 0 {
+			msgs, err = gw.store.ListMessagesBefore(s.Name(), m.Peer, m.BeforeID, m.Limit)
+		} else {
+			msgs, err = gw.store.ListMessages(s.Name(), m.Limit)
+		}
 		if err != nil {
 			gw.log.Error("list messages failed", zap.Error(err))
 			s.send(protocol.Message{Type: protocol.TypeError, Error: "查询历史失败"})
 			return
 		}
-		s.send(protocol.Message{Type: protocol.TypeHistory, Messages: storeToProto(msgs), TS: time.Now().Unix()})
+		// 回显 Peer/BeforeID，让前端能分辨这是「初始全量」还是「某会话上滑加载更早」，
+		// 并把结果归位到正确的会话（否则多会话并发分页时无法对应）。
+		s.send(protocol.Message{Type: protocol.TypeHistory, Peer: m.Peer, BeforeID: m.BeforeID, Messages: storeToProto(msgs), TS: time.Now().Unix()})
 
 	case protocol.TypeHeartbeat:
 		s.send(protocol.Message{Type: protocol.TypePong})
@@ -148,6 +157,7 @@ func storeToProto(msgs []store.Message) []*protocol.Message {
 	out := make([]*protocol.Message, 0, len(msgs))
 	for _, m := range msgs {
 		out = append(out, &protocol.Message{
+			ID:       m.ID,
 			Type:     m.Type,
 			From:     m.From,
 			To:       m.To,
