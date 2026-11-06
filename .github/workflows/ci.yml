@@ -1,0 +1,32 @@
+name: CI
+
+# 每次 push 到 master 或提 PR 时自动跑：vet → build → 竞态测试 + 覆盖率。
+# PostgreSQL 集成测试在无 PG 的 CI 环境会自动 skip（见 internal/store/postgres_test.go）。
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # 直接从 go.mod 读 Go 版本，本地和 CI 永远一致
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test（竞态检测 + 覆盖率）
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: 总覆盖率
+        run: go tool cover -func=coverage.out | tail -1

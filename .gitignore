@@ -2,6 +2,9 @@
 *.exe
 bin/
 
+# 覆盖率报告（make cover 生成）
+coverage.out
+
 # SQLite 数据库文件（运行时生成，不提交）
 *.db
 *.db-journal

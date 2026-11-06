@@ -1,5 +1,7 @@
 # communicate — Go 分布式实时聊天室
 
+[![CI](https://github.com/the-standing-aviator/chatroom/actions/workflows/ci.yml/badge.svg)](https://github.com/the-standing-aviator/chatroom/actions/workflows/ci.yml)
+
 > 一个真实可用的 Go 后端 + 网络编程项目：从单机 TCP 聊天室起步，演进到多节点分布式架构，目标是逐步做到**千万级在线**（作为北极星方向）。
 
 用 Go 从零实现了聊天室的完整链路——自定义 TCP 协议、会话管理、JWT 鉴权、消息持久化、在线状态、跨节点消息路由、负载均衡、压测与可观测，并把每一层都抽象成可替换的接口（ports & adapters）。
